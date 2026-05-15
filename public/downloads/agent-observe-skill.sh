@@ -3,7 +3,7 @@ set -u
 
 ROOT="${1:-$(pwd)}"
 ROOT="$(cd "$ROOT" 2>/dev/null && pwd)"
-OUT_DIR="$ROOT/.agent-observability"
+OUT_DIR="$ROOT/.agent-observe-skill"
 SELF_PATH="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
 
 mkdir -p "$OUT_DIR"
@@ -34,7 +34,7 @@ const ignoreDirs = new Set([
   "coverage",
   ".turbo",
   ".vercel",
-  ".agent-observability",
+  ".agent-observe-skill",
 ]);
 const scanExts = new Set([
   ".js",
@@ -491,7 +491,7 @@ write(
     ),
 );
 
-const report = `${header("Agent Observability Report")}## Summary
+const report = `${header("Agent Observe Report")}## Summary
 
 - Prompts detected: ${records.prompts.length}
 - Tools detected: ${records.tools.length}
@@ -536,7 +536,7 @@ write(
     {
       generatedAt,
       root,
-      scanner: "agent-observability-skill.sh",
+      scanner: "agent-observe-skill.sh",
       summary: {
         prompts: records.prompts.length,
         tools: records.tools.length,
@@ -552,7 +552,7 @@ write(
   ) + "\n",
 );
 
-console.log(`Agent observability report written to ${outDir}`);
+console.log(`Agent Observe report written to ${outDir}`);
 console.log(`Open ${path.join(outDir, "report.md")}`);
 NODE
   exit $?
@@ -566,7 +566,7 @@ ROUTES="$OUT_DIR/routes.md"
 RISKS="$OUT_DIR/risks.md"
 TRACE="$OUT_DIR/trace-map.json"
 
-say "# Agent Observability Report" > "$REPORT"
+say "# Agent Observe Report" > "$REPORT"
 say "" >> "$REPORT"
 say "Generated locally from \`$ROOT\`." >> "$REPORT"
 say "" >> "$REPORT"
@@ -586,7 +586,7 @@ route_count=0
 risk_count=0
 
 find "$ROOT" \
-  \( -name .git -o -name node_modules -o -name .next -o -name dist -o -name build -o -name coverage -o -name .agent-observability \) -prune \
+  \( -name .git -o -name node_modules -o -name .next -o -name dist -o -name build -o -name coverage -o -name .agent-observe-skill \) -prune \
   -o \( -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" -o -name "*.mjs" -o -name "*.cjs" -o -name "*.mdx" \) -type f -print |
 while IFS= read -r file; do
   [ "$(cd "$(dirname "$file")" 2>/dev/null && pwd)/$(basename "$file")" = "$SELF_PATH" ] && continue
@@ -663,12 +663,12 @@ done
 
 cat > "$TRACE" <<JSON
 {
-  "scanner": "agent-observability-skill.sh",
+  "scanner": "agent-observe-skill.sh",
   "mode": "bash-fallback",
   "root": "$(printf '%s' "$ROOT" | sed 's/"/\\"/g')",
   "note": "Install Node for rich trace-map records."
 }
 JSON
 
-say "Agent observability report written to $OUT_DIR"
+say "Agent Observe report written to $OUT_DIR"
 say "Open $REPORT"

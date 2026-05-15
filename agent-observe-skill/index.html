@@ -1,0 +1,912 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Observe Skill</title>
+    <meta
+      name="description"
+      content="Drop one file into your repo. See every prompt, tool, and chain. Your code never leaves your machine."
+    />
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f7f3;
+        --panel: #ffffff;
+        --panel-soft: #f0f3ee;
+        --ink: #171a16;
+        --muted: #5d675c;
+        --line: #d7ddd2;
+        --line-strong: #b7c2b2;
+        --green: #1b7c55;
+        --blue: #2359a6;
+        --amber: #a96d11;
+        --red: #b4372f;
+        --violet: #6a4cad;
+        --shadow: 0 18px 55px rgba(35, 44, 30, 0.12);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--ink);
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .shell {
+        min-height: 100vh;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+      }
+
+      .toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 14px clamp(16px, 3vw, 34px);
+        border-bottom: 1px solid var(--line);
+        background: rgba(246, 247, 243, 0.92);
+        backdrop-filter: blur(18px);
+      }
+
+      .brand {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 10px 14px;
+        min-width: 0;
+      }
+
+      .brand strong {
+        font-size: 15px;
+        letter-spacing: 0;
+      }
+
+      .brand span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .download {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        border: 1px solid #111811;
+        color: #fff;
+        background: #111811;
+        text-decoration: none;
+        border-radius: 7px;
+        padding: 10px 13px;
+        font-weight: 650;
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      .download svg {
+        width: 16px;
+        height: 16px;
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+        gap: 18px;
+        padding: 22px clamp(16px, 3vw, 34px);
+      }
+
+      .main {
+        display: grid;
+        grid-template-rows: auto auto minmax(520px, 1fr);
+        gap: 18px;
+        min-width: 0;
+      }
+
+      .intro {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 22px;
+        align-items: end;
+      }
+
+      h1 {
+        margin: 0;
+        max-width: 820px;
+        font-size: clamp(34px, 5vw, 76px);
+        line-height: 0.96;
+        letter-spacing: 0;
+      }
+
+      .trust {
+        max-width: 290px;
+        border-left: 3px solid var(--green);
+        padding-left: 13px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.45;
+      }
+
+      .trust strong {
+        color: var(--ink);
+      }
+
+      .promptbar {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        padding: 11px 13px;
+        box-shadow: 0 10px 32px rgba(35, 44, 30, 0.08);
+      }
+
+      .promptbar span {
+        color: var(--muted);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .promptbar code {
+        display: block;
+        min-width: 0;
+        overflow-wrap: anywhere;
+        color: var(--ink);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 13px;
+      }
+
+      .map {
+        position: relative;
+        overflow: hidden;
+        min-height: 520px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background:
+          linear-gradient(90deg, rgba(23, 26, 22, 0.045) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(23, 26, 22, 0.045) 1px, transparent 1px),
+          var(--panel);
+        background-size: 34px 34px;
+        box-shadow: var(--shadow);
+      }
+
+      .map-head {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        padding: 15px 18px 0;
+      }
+
+      .map-title {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+
+      .map-title strong {
+        font-size: 14px;
+      }
+
+      .map-title span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 99px;
+        background: currentColor;
+      }
+
+      .canvas {
+        position: absolute;
+        inset: 62px 14px 14px;
+      }
+
+      .links {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+
+      .links path {
+        fill: none;
+        stroke: #aab5a5;
+        stroke-width: 2;
+      }
+
+      .links path.warn {
+        stroke: var(--red);
+        stroke-dasharray: 7 6;
+      }
+
+      .node {
+        position: absolute;
+        display: grid;
+        gap: 8px;
+        width: min(210px, 29vw);
+        min-width: 142px;
+        border: 1px solid var(--line-strong);
+        border-left-width: 5px;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.94);
+        padding: 11px;
+        text-align: left;
+        cursor: pointer;
+        color: var(--ink);
+        box-shadow: 0 10px 28px rgba(35, 44, 30, 0.1);
+        transition:
+          transform 0.16s ease,
+          border-color 0.16s ease,
+          box-shadow 0.16s ease;
+      }
+
+      .node:hover,
+      .node:focus-visible,
+      .node.active {
+        outline: none;
+        transform: translateY(-2px);
+        border-color: #1f271d;
+        box-shadow: 0 16px 40px rgba(35, 44, 30, 0.17);
+      }
+
+      .node .type {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .node .name {
+        font-size: 14px;
+        font-weight: 720;
+      }
+
+      .node .meta {
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+      }
+
+      .node.prompt {
+        border-left-color: var(--blue);
+      }
+
+      .node.call {
+        border-left-color: var(--violet);
+      }
+
+      .node.tool {
+        border-left-color: var(--green);
+      }
+
+      .node.route {
+        border-left-color: var(--amber);
+      }
+
+      .node.risk {
+        border-left-color: var(--red);
+      }
+
+      .n-route {
+        left: 4%;
+        top: 9%;
+      }
+
+      .n-ui {
+        left: 4%;
+        top: 52%;
+      }
+
+      .n-prompt {
+        left: 31%;
+        top: 2%;
+      }
+
+      .n-call {
+        left: 39%;
+        top: 36%;
+      }
+
+      .n-tool-a {
+        right: 8%;
+        top: 6%;
+      }
+
+      .n-tool-b {
+        right: 8%;
+        top: 35%;
+      }
+
+      .n-risk-a {
+        left: 31%;
+        bottom: 4%;
+      }
+
+      .n-risk-b {
+        right: 8%;
+        bottom: 6%;
+      }
+
+      .inspector {
+        position: sticky;
+        top: 78px;
+        align-self: start;
+        display: grid;
+        gap: 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        padding: 16px;
+        box-shadow: var(--shadow);
+      }
+
+      .panel-kicker {
+        color: var(--muted);
+        font-size: 11px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .inspector h2 {
+        margin: 0;
+        font-size: 24px;
+        line-height: 1.08;
+        letter-spacing: 0;
+      }
+
+      .inspector p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.5;
+        font-size: 14px;
+      }
+
+      .kv {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+      }
+
+      .kv div {
+        display: grid;
+        grid-template-columns: 92px minmax(0, 1fr);
+        gap: 10px;
+        padding: 9px 0;
+        border-top: 1px solid var(--line);
+        font-size: 13px;
+      }
+
+      .kv dt {
+        color: var(--muted);
+      }
+
+      .kv dd {
+        margin: 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        overflow-wrap: anywhere;
+      }
+
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 6px 8px;
+        color: var(--muted);
+        background: var(--panel-soft);
+        font-size: 12px;
+      }
+
+      .report {
+        margin: 0 clamp(16px, 3vw, 34px) 28px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #101410;
+        color: #edf3ea;
+        overflow: hidden;
+        box-shadow: var(--shadow);
+      }
+
+      .report header {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        padding: 13px 16px;
+        border-bottom: 1px solid rgba(237, 243, 234, 0.15);
+      }
+
+      .report header span {
+        color: #aebbaa;
+        font-size: 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+
+      pre {
+        margin: 0;
+        padding: 18px;
+        overflow-x: auto;
+        font-size: 13px;
+        line-height: 1.55;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        white-space: pre-wrap;
+      }
+
+      @media (max-width: 980px) {
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+
+        .inspector {
+          position: static;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .toolbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .download {
+          width: 100%;
+          justify-content: center;
+        }
+
+        .intro {
+          grid-template-columns: 1fr;
+        }
+
+        .promptbar {
+          grid-template-columns: 1fr;
+        }
+
+        .map {
+          min-height: 760px;
+        }
+
+        .canvas {
+          inset: 70px 12px 12px;
+        }
+
+        .links {
+          display: none;
+        }
+
+        .node {
+          width: calc(50% - 18px);
+          min-width: 0;
+        }
+
+        .n-route {
+          left: 3%;
+          top: 2%;
+        }
+
+        .n-ui {
+          left: 52%;
+          top: 2%;
+        }
+
+        .n-prompt {
+          left: 3%;
+          top: 27%;
+        }
+
+        .n-call {
+          left: 52%;
+          top: 27%;
+        }
+
+        .n-tool-a {
+          left: 3%;
+          top: 53%;
+          right: auto;
+        }
+
+        .n-tool-b {
+          left: 52%;
+          top: 53%;
+          right: auto;
+        }
+
+        .n-risk-a {
+          left: 3%;
+          bottom: 3%;
+        }
+
+        .n-risk-b {
+          left: 52%;
+          right: auto;
+          bottom: 3%;
+        }
+      }
+
+      @media (max-width: 520px) {
+        .map {
+          min-height: 980px;
+        }
+
+        .node {
+          width: calc(100% - 20px);
+        }
+
+        .n-route,
+        .n-ui,
+        .n-prompt,
+        .n-call,
+        .n-tool-a,
+        .n-tool-b,
+        .n-risk-a,
+        .n-risk-b {
+          left: 10px;
+          right: auto;
+        }
+
+        .n-route {
+          top: 0;
+        }
+
+        .n-ui {
+          top: 115px;
+        }
+
+        .n-prompt {
+          top: 230px;
+        }
+
+        .n-call {
+          top: 345px;
+        }
+
+        .n-tool-a {
+          top: 460px;
+        }
+
+        .n-tool-b {
+          top: 575px;
+        }
+
+        .n-risk-a {
+          top: 690px;
+          bottom: auto;
+        }
+
+        .n-risk-b {
+          top: 805px;
+          bottom: auto;
+        }
+
+        .kv div {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="toolbar" aria-label="Agent Observe toolbar">
+        <div class="brand">
+          <strong>Agent Observe Skill</strong>
+          <span>Local scanner for Vercel AI SDK prompts, tools, chains, routes, evals, and risks.</span>
+        </div>
+        <a
+          class="download"
+          href="/public/downloads/agent-observe-skill.sh"
+          download="skill.sh"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 3v11m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          Download skill.sh
+        </a>
+      </header>
+
+      <main class="workspace">
+        <section class="main" aria-label="Observability preview">
+          <div class="intro">
+            <h1>Drop one file into your repo. See every prompt, tool, and chain.</h1>
+            <div class="trust">
+              <strong>Your code never leaves your machine.</strong> The script scans local files and writes
+              Markdown plus JSON into <code>.agent-observe-skill/</code>.
+            </div>
+          </div>
+
+          <div class="promptbar" aria-label="Example skill invocation prompt">
+            <span>Prompt</span>
+            <code>Use $agent-observe-skill to map this repo's prompts, tools, routes, chains, eval gaps, and trace risks.</code>
+          </div>
+
+          <section class="map" aria-label="Detected agent chain map">
+            <div class="map-head">
+              <div class="map-title">
+                <strong>Preview: generated trace map</strong>
+                <span>Click a node to inspect detected evidence and risks.</span>
+              </div>
+              <div class="legend" aria-label="Legend">
+                <span style="color: var(--amber)"><i class="dot"></i>Entry</span>
+                <span style="color: var(--blue)"><i class="dot"></i>Prompt</span>
+                <span style="color: var(--violet)"><i class="dot"></i>Model</span>
+                <span style="color: var(--green)"><i class="dot"></i>Tool</span>
+                <span style="color: var(--red)"><i class="dot"></i>Risk</span>
+              </div>
+            </div>
+            <div class="canvas">
+              <svg class="links" viewBox="0 0 1000 560" preserveAspectRatio="none" aria-hidden="true">
+                <path d="M145 110 C300 110 260 80 425 92" />
+                <path d="M145 360 C285 360 315 315 455 300" />
+                <path d="M515 125 C575 185 560 245 510 292" />
+                <path d="M575 300 C700 230 710 95 850 115" />
+                <path d="M575 310 C710 300 710 300 850 300" />
+                <path class="warn" d="M505 355 C480 440 395 455 405 505" />
+                <path class="warn" d="M585 350 C720 420 730 455 850 500" />
+              </svg>
+
+              <button class="node route n-route active" data-node="route">
+                <span class="type">Route <span>app/api/chat</span></span>
+                <span class="name">POST chat route</span>
+                <span class="meta">export async function POST(req)</span>
+              </button>
+              <button class="node route n-ui" data-node="ui">
+                <span class="type">UI entry <span>client</span></span>
+                <span class="name">useChat checkout assistant</span>
+                <span class="meta">components/chat-panel.tsx</span>
+              </button>
+              <button class="node prompt n-prompt" data-node="prompt">
+                <span class="type">Prompt <span>system</span></span>
+                <span class="name">Support agent policy</span>
+                <span class="meta">system: `You are a billing agent...`</span>
+              </button>
+              <button class="node call n-call" data-node="call">
+                <span class="type">Model call <span>streamText</span></span>
+                <span class="name">gpt-4.1-mini response chain</span>
+                <span class="meta">tools: { searchOrders, refundUser }</span>
+              </button>
+              <button class="node tool n-tool-a" data-node="toolA">
+                <span class="type">Tool <span>read</span></span>
+                <span class="name">searchOrders</span>
+                <span class="meta">inputSchema: orderId, email</span>
+              </button>
+              <button class="node tool n-tool-b" data-node="toolB">
+                <span class="type">Tool <span>side effect</span></span>
+                <span class="name">refundUser</span>
+                <span class="meta">execute: stripe.refunds.create(...)</span>
+              </button>
+              <button class="node risk n-risk-a" data-node="riskA">
+                <span class="type">Risk <span>auditability</span></span>
+                <span class="name">Inline prompt</span>
+                <span class="meta">Hard to diff, reuse, or evaluate.</span>
+              </button>
+              <button class="node risk n-risk-b" data-node="riskB">
+                <span class="type">Risk <span>telemetry</span></span>
+                <span class="name">No trace ID or eval</span>
+                <span class="meta">No experimental_telemetry or eval file.</span>
+              </button>
+            </div>
+          </section>
+        </section>
+
+        <aside class="inspector" aria-live="polite">
+          <span class="panel-kicker">Inspector</span>
+          <h2 id="inspector-title">POST chat route</h2>
+          <p id="inspector-copy">
+            AI behavior is exposed through a server route. The scanner records the route, HTTP
+            methods, linked model calls, prompts, tools, and missing trace coverage.
+          </p>
+          <dl class="kv">
+            <div>
+              <dt>File</dt>
+              <dd id="inspector-file">app/api/chat/route.ts:12</dd>
+            </div>
+            <div>
+              <dt>Detects</dt>
+              <dd id="inspector-detects">POST, streamText, messages</dd>
+            </div>
+            <div>
+              <dt>Output</dt>
+              <dd id="inspector-output">routes.md, trace-map.json</dd>
+            </div>
+          </dl>
+          <div class="chips" id="inspector-chips">
+            <span class="chip">route</span>
+            <span class="chip">entry point</span>
+            <span class="chip">AI behavior</span>
+          </div>
+        </aside>
+      </main>
+
+      <section class="report" aria-label="Sample generated report">
+        <header>
+          <strong>Sample generated report</strong>
+          <span>.agent-observe-skill/report.md</span>
+        </header>
+        <pre># Agent Observe Report
+
+Generated locally from this repository.
+
+## Prompts
+- app/api/chat/route.ts:18 system prompt is inline.
+- lib/agents/billing.ts:42 prompt template feeds generateText.
+
+## Model Calls
+- streamText in app/api/chat/route.ts uses the support policy prompt and exposes searchOrders, refundUser.
+- generateText in lib/agents/billing.ts has no trace ID evidence.
+
+## Tools
+- searchOrders exposes inputSchema fields: orderId, email. Side effects: no.
+- refundUser exposes inputSchema fields: paymentIntentId, amount. Side effects: yes.
+
+## Routes And UI Entrypoints
+- app/api/chat/route.ts exposes POST behavior.
+- components/chat-panel.tsx starts client chat through useChat.
+
+## Risks
+- Inline prompt is hard to audit.
+- refundUser has side effects and should be traced.
+- Chat chain lacks eval coverage.
+- No experimental_telemetry, traceId, or structured logger found.</pre>
+      </section>
+    </div>
+
+    <script>
+      const inspectorData = {
+        route: {
+          title: "POST chat route",
+          copy:
+            "AI behavior is exposed through a server route. The scanner records the route, HTTP methods, linked model calls, prompts, tools, and missing trace coverage.",
+          file: "app/api/chat/route.ts:12",
+          detects: "POST, streamText, messages",
+          output: "routes.md, trace-map.json",
+          chips: ["route", "entry point", "AI behavior"],
+        },
+        ui: {
+          title: "useChat checkout assistant",
+          copy:
+            "Client chat usage marks the user-facing entry point. The report links it to the API route when endpoint names match.",
+          file: "components/chat-panel.tsx:9",
+          detects: "useChat, api: /api/chat",
+          output: "routes.md, chains.md",
+          chips: ["UI", "client", "chat"],
+        },
+        prompt: {
+          title: "Support agent policy",
+          copy:
+            "Prompt evidence includes system, prompt, and messages usage. Inline text is called out as an audit risk.",
+          file: "app/api/chat/route.ts:18",
+          detects: "system literal",
+          output: "prompts.md, risks.md",
+          chips: ["prompt", "inline", "system"],
+        },
+        call: {
+          title: "gpt-4.1-mini response chain",
+          copy:
+            "Vercel AI SDK calls are detected first, including streamText, generateText, generateObject, streamObject, and ToolLoopAgent.",
+          file: "app/api/chat/route.ts:16",
+          detects: "streamText, model, tools",
+          output: "chains.md, trace-map.json",
+          chips: ["model call", "chain", "Vercel AI SDK"],
+        },
+        toolA: {
+          title: "searchOrders",
+          copy:
+            "Tool definitions are mapped to schemas and execute handlers so reviewers can see what data each chain can request.",
+          file: "lib/ai/tools.ts:21",
+          detects: "tool(), inputSchema, execute",
+          output: "tools.md",
+          chips: ["tool", "schema", "read path"],
+        },
+        toolB: {
+          title: "refundUser",
+          copy:
+            "Side-effecting tools are flagged when execute handlers call payment, database, filesystem, HTTP mutation, email, or queue APIs.",
+          file: "lib/ai/tools.ts:54",
+          detects: "execute, stripe.refunds.create",
+          output: "tools.md, risks.md",
+          chips: ["tool", "side effect", "needs trace"],
+        },
+        riskA: {
+          title: "Inline prompt",
+          copy:
+            "Inline prompts are difficult to reuse, diff, or cover with evals. The report lists every prompt location and preview.",
+          file: "app/api/chat/route.ts:18",
+          detects: "system: `...`",
+          output: "risks.md",
+          chips: ["risk", "prompt audit"],
+        },
+        riskB: {
+          title: "No trace ID or eval",
+          copy:
+            "Chains without eval references, trace IDs, structured logging, or AI SDK telemetry are highlighted for observability follow-up.",
+          file: "app/api/chat/route.ts:16",
+          detects: "missing telemetry evidence",
+          output: "risks.md, report.md",
+          chips: ["risk", "eval gap", "trace gap"],
+        },
+      };
+
+      const nodes = document.querySelectorAll(".node");
+      const title = document.querySelector("#inspector-title");
+      const copy = document.querySelector("#inspector-copy");
+      const file = document.querySelector("#inspector-file");
+      const detects = document.querySelector("#inspector-detects");
+      const output = document.querySelector("#inspector-output");
+      const chips = document.querySelector("#inspector-chips");
+
+      nodes.forEach((node) => {
+        node.addEventListener("click", () => {
+          nodes.forEach((item) => item.classList.remove("active"));
+          node.classList.add("active");
+          const data = inspectorData[node.dataset.node];
+          title.textContent = data.title;
+          copy.textContent = data.copy;
+          file.textContent = data.file;
+          detects.textContent = data.detects;
+          output.textContent = data.output;
+          chips.replaceChildren(
+            ...data.chips.map((label) => {
+              const chip = document.createElement("span");
+              chip.className = "chip";
+              chip.textContent = label;
+              return chip;
+            }),
+          );
+        });
+      });
+    </script>
+  </body>
+</html>

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Agent Observability"
-  short_description: "Map local agent prompts, tools, chains, routes, and risks"
-  default_prompt: "Use $agent-observability-skill to scan this repo for prompts, tools, chains, routes, eval gaps, and trace risks."
