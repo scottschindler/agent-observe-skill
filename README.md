@@ -9,7 +9,7 @@ Agent Observe Skill is a local scanner for AI-agent codebases. It looks for Verc
 After this repo is published to GitHub, install it into your agent environment:
 
 ```bash
-npx skills add <owner>/agent-observe-skill
+npx skills add scottschindler/agent-observe-skill
 ```
 
 Then invoke it from your agent:
