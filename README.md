@@ -60,6 +60,8 @@ After the dev server reloads, open:
 /agent-observe-skill
 ```
 
+The generated UI is intentionally simple: overall counts, agent buttons, evidence buttons, and one detail panel. Users can select an agent, then inspect tool calls, prompts, model calls, routes, and risks locally in the browser.
+
 The generated report files are local-only by default. The scanner adds these paths to the target repo's `.git/info/exclude`, not `.gitignore`, so they do not show up in normal `git status` output and are not committed by `git add .`:
 
 ```text
@@ -126,7 +128,7 @@ Or scan another repo:
 bash agent-observe-skill/scripts/skill.sh /path/to/repo
 ```
 
-If the repo contains more than one detected agent, the scanner asks which one to analyze when run in an interactive terminal. In automation, it scans all agents by default.
+If the repo contains more than one detected agent, the scanner asks whether to analyze one, multiple, or all agents when run in an interactive terminal. In automation, run `--list-agents` first, then pass a comma-separated `--agent` value if you want a subset. Without `--agent`, it scans all agents.
 
 List detected agents:
 
@@ -134,10 +136,11 @@ List detected agents:
 bash agent-observe-skill/scripts/skill.sh /path/to/repo --list-agents
 ```
 
-Scan one agent:
+Scan one agent or a selected subset:
 
 ```bash
 bash agent-observe-skill/scripts/skill.sh /path/to/repo --agent checkout
+bash agent-observe-skill/scripts/skill.sh /path/to/repo --agent checkout,billing
 ```
 
 The downloadable single-file version is here:
@@ -168,7 +171,7 @@ The scanner creates a local output folder in the target repo:
 └── trace-map.json
 ```
 
-Start with `index.html` for the visual report or `report.md` for the Markdown summary. Use `trace-map.json` for structured follow-up analysis or visualizations. These generated files are added to `.git/info/exclude` so they stay out of ordinary commits.
+Start with `index.html` for the visual report or `report.md` for the Markdown summary. The visual report includes overall counts, agent selection, and per-agent detail views for tool calls, prompts, model calls, routes, and risks. Use `trace-map.json` for structured follow-up analysis or visualizations. These generated files are added to `.git/info/exclude` so they stay out of ordinary commits.
 
 ## What It Detects
 
@@ -229,8 +232,9 @@ The static product demo is available at:
 Its source is `agent-observe-skill/index.html`. It includes:
 
 - A download button for `skill.sh`
-- A visual chain map
-- An inspector panel
-- A sample generated report
+- Overall counts
+- Agent selection
+- Per-agent detail buttons for tool calls, prompts, model calls, routes, and risks
+- A focused detail panel
 
 To preview it locally, serve the repo with any static file server and open `/agent-observe-skill/`.

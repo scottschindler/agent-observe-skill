@@ -21,10 +21,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --help|-h)
       cat <<'HELP'
-Usage: bash skill.sh [repo-path] [--agent <agent-name-or-id>] [--list-agents]
+Usage: bash skill.sh [repo-path] [--agent <agent-name-or-id[,agent-name-or-id...]>] [--list-agents]
 
 Options:
-  --agent <value>   Scan one detected agent. Accepts the shown agent id or name.
+  --agent <value>   Scan one or more detected agents. Accepts shown ids, names, comma-separated values, or "all".
   --list-agents     Print detected agents and exit without writing reports.
   --help            Show this help.
 HELP
@@ -609,7 +609,40 @@ function readTtyLine(prompt) {
   }
 }
 
-function chooseAgent(agents) {
+function parseAgentSelection(value, agents) {
+  const tokens = clean(value).split(",").map(clean).filter(Boolean);
+  if (!tokens.length) return { all: true, selected: [], missing: [] };
+  if (tokens.some((token) => token === "0" || token === "*" || slug(token) === "all" || slug(token) === "all-agents")) {
+    return { all: true, selected: [], missing: [] };
+  }
+
+  const selected = [];
+  const seen = new Set();
+  const missing = [];
+  for (const token of tokens) {
+    const asIndex = Number(token);
+    const requested = slug(token);
+    const found = Number.isInteger(asIndex) && asIndex >= 1 && asIndex <= agents.length
+      ? agents[asIndex - 1]
+      : agents.find((agent) => agent.id === token || slug(agent.id) === requested || slug(agent.name) === requested);
+    if (!found) {
+      missing.push(token);
+      continue;
+    }
+    if (!seen.has(found.id)) {
+      selected.push(found);
+      seen.add(found.id);
+    }
+  }
+  return { all: false, selected, missing };
+}
+
+function describeSelection(agents) {
+  if (!agents || !agents.length) return "All detected agents";
+  return agents.map((agent) => `${agent.name} (${agent.id})`).join(", ");
+}
+
+function chooseAgents(agents) {
   if (listAgentsOnly) {
     if (!agents.length) {
       console.log("No agent candidates detected.");
@@ -623,17 +656,17 @@ function chooseAgent(agents) {
   }
 
   if (requestedAgent) {
-    const requested = slug(requestedAgent);
-    const found = agents.find((agent) => agent.id === requestedAgent || slug(agent.id) === requested || slug(agent.name) === requested);
-    if (!found) {
-      console.error(`Agent not found: ${requestedAgent}`);
+    const selection = parseAgentSelection(requestedAgent, agents);
+    if (selection.all) return null;
+    if (selection.missing.length) {
+      console.error(`Agent not found: ${selection.missing.join(", ")}`);
       if (agents.length) {
         console.error("Available agents:");
         agents.forEach((agent) => console.error(`- ${agent.name} (${agent.id})`));
       }
       process.exit(1);
     }
-    return found;
+    return selection.selected;
   }
 
   if (agents.length > 1 && interactive) {
@@ -642,28 +675,34 @@ function chooseAgent(agents) {
     agents.forEach((agent, index) => {
       console.log(`${index + 1}. ${agent.name} (${agent.id}) - chains:${agent.counts.chains} routes:${agent.counts.routes} tools:${agent.counts.tools} prompts:${agent.counts.prompts} risks:${agent.counts.risks}`);
     });
-    const answer = readTtyLine("Choose an agent to analyze [0]: ");
-    if (!answer || answer === "0") return null;
-    const index = Number(answer);
-    if (Number.isInteger(index) && index >= 1 && index <= agents.length) return agents[index - 1];
-    const requested = slug(answer);
-    const found = agents.find((agent) => agent.id === answer || slug(agent.id) === requested || slug(agent.name) === requested);
-    if (found) return found;
+    const answer = readTtyLine("Choose agents to analyze. Use comma-separated numbers, ids, names, or 0 for all [0]: ");
+    if (!answer) return null;
+    const selection = parseAgentSelection(answer, agents);
+    if (selection.all) return null;
+    if (!selection.missing.length && selection.selected.length) return selection.selected;
     console.log("Selection not recognized. Scanning all agents.");
   }
 
   return null;
 }
 
-function applyAgentFilter(agent) {
+function applyAgentFilter(selectedAgents) {
   records.agents = computeAgents();
-  const selectedAgent = agent || null;
-  if (!selectedAgent) return { selectedAgent: null, mode: records.agents.length > 1 ? "all-agents" : "single-or-none" };
+  const allAgents = records.agents;
+  const selectedList = selectedAgents || [];
+  if (!selectedList.length) {
+    return {
+      selectedAgent: null,
+      selectedAgents: [],
+      label: "All detected agents",
+      mode: records.agents.length > 1 ? "all-agents" : "single-or-none",
+    };
+  }
 
-  const selectedId = selectedAgent.id;
-  const selectedChains = records.chains.filter((item) => item.agentId === selectedId);
-  const selectedRoutes = records.routes.filter((item) => item.agentId === selectedId);
-  const selectedUi = records.uiEntrypoints.filter((item) => item.agentId === selectedId);
+  const selectedIds = new Set(selectedList.map((agent) => agent.id));
+  const selectedChains = records.chains.filter((item) => selectedIds.has(item.agentId));
+  const selectedRoutes = records.routes.filter((item) => selectedIds.has(item.agentId));
+  const selectedUi = records.uiEntrypoints.filter((item) => selectedIds.has(item.agentId));
   const selectedFiles = new Set([...selectedChains, ...selectedRoutes, ...selectedUi].map((item) => item.file));
   const selectedToolNames = new Set(selectedChains.flatMap((chain) => chain.tools || []));
   const selectedTargetIds = new Set([...selectedChains, ...selectedRoutes, ...selectedUi].map((item) => item.id));
@@ -671,17 +710,22 @@ function applyAgentFilter(agent) {
   records.chains = selectedChains;
   records.routes = selectedRoutes;
   records.uiEntrypoints = selectedUi;
-  records.prompts = records.prompts.filter((item) => item.agentId === selectedId || selectedFiles.has(item.file));
-  records.tools = records.tools.filter((item) => item.agentId === selectedId || selectedFiles.has(item.file) || selectedToolNames.has(item.name));
+  records.prompts = records.prompts.filter((item) => selectedIds.has(item.agentId) || selectedFiles.has(item.file));
+  records.tools = records.tools.filter((item) => selectedIds.has(item.agentId) || selectedFiles.has(item.file) || selectedToolNames.has(item.name));
   for (const item of [...records.prompts, ...records.tools]) selectedTargetIds.add(item.id);
-  records.modelCalls = records.modelCalls.filter((item) => item.agentId === selectedId);
-  records.risks = records.risks.filter((item) => item.agentId === selectedId || selectedFiles.has(item.file) || selectedTargetIds.has(item.targetId));
-  records.agents = [selectedAgent];
-  return { selectedAgent, mode: "selected-agent" };
+  records.modelCalls = records.modelCalls.filter((item) => selectedIds.has(item.agentId));
+  records.risks = records.risks.filter((item) => selectedIds.has(item.agentId) || selectedFiles.has(item.file) || selectedTargetIds.has(item.targetId));
+  records.agents = allAgents.filter((agent) => selectedIds.has(agent.id));
+  return {
+    selectedAgent: records.agents.length === 1 ? records.agents[0] : null,
+    selectedAgents: records.agents,
+    label: describeSelection(records.agents),
+    mode: records.agents.length === 1 ? "selected-agent" : "selected-agents",
+  };
 }
 
 records.agents = computeAgents();
-const selection = applyAgentFilter(chooseAgent(records.agents));
+const selection = applyAgentFilter(chooseAgents(records.agents));
 
 function rows(items, empty, render) {
   if (!items.length) return `- ${empty}\n`;
@@ -737,11 +781,8 @@ function tracePayload(generatedAt) {
   };
 }
 
-function renderHtmlReport(trace, report) {
-  const selected = trace.selection.selectedAgent
-    ? `${trace.selection.selectedAgent.name} (${trace.selection.selectedAgent.id})`
-    : "All detected agents";
-  const topRisks = trace.risks.slice(0, 8);
+function renderSimpleHtmlReport(trace, report) {
+  const json = JSON.stringify({ ...trace, markdownReport: report }).replace(/</g, "\\u003c");
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -749,38 +790,39 @@ function renderHtmlReport(trace, report) {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Agent Observe Report</title>
     <style>
-      :root { color-scheme: light; --bg: #f6f7f3; --panel: #fff; --ink: #171a16; --muted: #5d675c; --line: #d7ddd2; --green: #1b7c55; --blue: #2359a6; --amber: #a96d11; --red: #b4372f; --violet: #6a4cad; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      :root { color-scheme: light; --bg: #f7f8f5; --panel: #fff; --ink: #171a16; --muted: #637063; --line: #d7ddd2; --blue: #2f80ed; --red: #b4372f; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       * { box-sizing: border-box; }
       body { margin: 0; background: var(--bg); color: var(--ink); }
-      main { display: grid; gap: 18px; padding: 28px; }
-      header { display: flex; justify-content: space-between; gap: 18px; align-items: flex-end; border-bottom: 1px solid var(--line); padding-bottom: 18px; }
-      h1 { margin: 0; max-width: 780px; font-size: clamp(34px, 6vw, 72px); line-height: .95; letter-spacing: 0; }
-      h2 { margin: 0 0 10px; font-size: 18px; letter-spacing: 0; }
-      p { margin: 0; color: var(--muted); line-height: 1.5; }
+      main { width: min(1040px, calc(100vw - 32px)); margin: 0 auto; padding: 28px 0 40px; display: grid; gap: 22px; }
+      header { display: flex; justify-content: space-between; gap: 18px; align-items: end; border-bottom: 1px solid var(--line); padding-bottom: 18px; }
+      h1 { margin: 0; font-size: clamp(34px, 6vw, 64px); line-height: .96; letter-spacing: 0; }
+      h2 { margin: 0 0 12px; font-size: 18px; letter-spacing: 0; }
+      p { margin: 0; color: var(--muted); line-height: 1.45; }
       code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-      .trust { max-width: 320px; border-left: 3px solid var(--green); padding-left: 12px; }
-      .grid { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)); gap: 10px; }
-      .card, section { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 14px 40px rgba(35, 44, 30, .08); }
-      .card { padding: 14px; }
-      .card strong { display: block; font-size: 28px; }
-      .card span { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
-      .columns { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr); gap: 18px; }
-      section { padding: 18px; }
-      .map { min-height: 420px; background: linear-gradient(90deg, rgba(23,26,22,.045) 1px, transparent 1px), linear-gradient(0deg, rgba(23,26,22,.045) 1px, transparent 1px), var(--panel); background-size: 34px 34px; }
-      .nodes { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; }
-      .node { border: 1px solid var(--line); border-left: 5px solid var(--blue); border-radius: 8px; background: rgba(255,255,255,.94); padding: 12px; }
-      .node.tool { border-left-color: var(--green); }
-      .node.chain { border-left-color: var(--violet); }
-      .node.route { border-left-color: var(--amber); }
-      .node.risk { border-left-color: var(--red); }
-      .node .type, .item .meta { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
-      .node strong, .item strong { display: block; margin-top: 6px; }
-      .node code, .item code { display: block; margin-top: 8px; color: var(--muted); overflow-wrap: anywhere; font-size: 12px; }
-      .list { display: grid; gap: 10px; }
-      .item { border-top: 1px solid var(--line); padding-top: 10px; }
-      .empty { padding: 12px; background: #f0f3ee; border-radius: 8px; }
-      pre { margin: 0; white-space: pre-wrap; overflow-x: auto; font-size: 12px; line-height: 1.5; color: #edf3ea; background: #101410; border-radius: 8px; padding: 16px; }
-      @media (max-width: 1000px) { .grid, .columns, .nodes { grid-template-columns: 1fr; } header { display: grid; } }
+      section, .panel { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 18px; box-shadow: 0 14px 40px rgba(35, 44, 30, .07); }
+      .trust { max-width: 330px; border-left: 3px solid #1b7c55; padding-left: 12px; }
+      .summary { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 10px; }
+      .metric { border: 1px solid var(--line); border-radius: 7px; padding: 14px; background: #fbfcf9; text-align: center; }
+      .metric strong { display: block; font-size: 28px; }
+      .metric span { color: var(--muted); font-size: 12px; }
+      .agents { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+      .agent-button { min-width: 150px; border: 2px solid #1f271d; border-radius: 8px; background: #fff; color: var(--ink); padding: 16px 18px; cursor: pointer; font: inherit; font-weight: 760; }
+      .agent-button.active { border-color: var(--blue); color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); }
+      .workspace { display: grid; grid-template-columns: minmax(260px, .95fr) minmax(300px, 1.05fr); gap: 28px; align-items: start; }
+      .agent-title { color: var(--blue); text-align: center; font-size: 30px; margin: 0 0 22px; }
+      .evidence-list { display: grid; gap: 12px; }
+      .evidence-button { width: 100%; border: 2px solid #1f271d; border-radius: 7px; background: #fff; color: var(--ink); padding: 18px; text-align: center; cursor: pointer; font: inherit; font-weight: 760; }
+      .evidence-button.active { border-color: var(--blue); color: var(--blue); }
+      .evidence-button small { display: block; margin-top: 4px; color: var(--muted); font-weight: 500; }
+      .detail-title { text-align: center; margin-bottom: 12px; font-weight: 760; }
+      .detail-box { min-height: 260px; border: 2px solid var(--blue); border-radius: 7px; background: #fff; padding: 18px; display: grid; gap: 12px; align-content: start; }
+      .row { border-top: 1px solid var(--line); padding-top: 10px; }
+      .row:first-child { border-top: 0; padding-top: 0; }
+      .row span { display: block; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+      .row strong { display: block; margin-top: 5px; }
+      .row code { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+      .empty { color: var(--muted); background: #f1f4ef; border-radius: 7px; padding: 12px; }
+      @media (max-width: 860px) { header, .workspace { grid-template-columns: 1fr; display: grid; } .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .trust { max-width: none; } }
     </style>
   </head>
   <body>
@@ -788,137 +830,146 @@ function renderHtmlReport(trace, report) {
       <header>
         <div>
           <h1>Agent Observe Report</h1>
-          <p>Selected agent: <strong>${escapeHtml(selected)}</strong></p>
+          <p>Initial scan scope: <strong>${escapeHtml(trace.selection.label || "All detected agents")}</strong></p>
         </div>
-        <p class="trust">Your code stayed local. This report was generated from static analysis at <code>${escapeHtml(trace.generatedAt)}</code>.</p>
+        <p class="trust">Your code stayed local. Generated from static analysis at <code>${escapeHtml(trace.generatedAt)}</code>.</p>
       </header>
-      <div class="grid">
-        ${summaryCards(trace.summary).map(([label, value]) => `<div class="card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}
-      </div>
-      <div class="columns">
-        <section class="map">
-          <h2>Chain Map</h2>
-          <p>Detected routes, model calls, tools, prompts, and risks.</p>
-          <div class="nodes">
-            ${trace.routes.slice(0, 6).map((route) => `<div class="node route"><span class="type">Route</span><strong>${escapeHtml(route.file)}</strong><code>${escapeHtml((route.aiPatterns || []).join(", ") || "No AI pattern")}</code></div>`).join("")}
-            ${trace.chains.slice(0, 6).map((chain) => `<div class="node chain"><span class="type">${escapeHtml(chain.type)}</span><strong>${escapeHtml(chain.model)}</strong><code>${escapeHtml(chain.file)}:${escapeHtml(chain.line)}</code></div>`).join("")}
-            ${trace.tools.slice(0, 6).map((tool) => `<div class="node tool"><span class="type">Tool</span><strong>${escapeHtml(tool.name)}</strong><code>${escapeHtml(tool.schema)}</code></div>`).join("")}
-            ${topRisks.map((risk) => `<div class="node risk"><span class="type">${escapeHtml(risk.severity)} risk</span><strong>${escapeHtml(risk.kind)}</strong><code>${escapeHtml(risk.file)}:${escapeHtml(risk.line)}</code></div>`).join("")}
-          </div>
-        </section>
-        <section>
-          <h2>Top Risks</h2>
-          ${renderList(topRisks, "No risks detected.", (risk) => `<div class="item"><span class="meta">${escapeHtml(risk.severity)} / ${escapeHtml(risk.kind)}</span><strong>${escapeHtml(risk.message)}</strong><code>${escapeHtml(risk.file)}:${escapeHtml(risk.line)}</code></div>`)}
-        </section>
-      </div>
+
+      <section>
+        <h2>Overall</h2>
+        <div class="summary" id="summary"></div>
+      </section>
+
       <section>
         <h2>Agents</h2>
-        ${renderList(trace.agents, "No agent candidates detected.", (agent) => `<div class="item"><span class="meta">${escapeHtml(agent.id)}</span><strong>${escapeHtml(agent.name)}</strong><code>${escapeHtml((agent.files || []).join(", "))}</code></div>`)}
+        <div class="agents" id="agents"></div>
       </section>
-      <section>
-        <h2>Generated Markdown Report</h2>
-        <pre>${escapeHtml(report)}</pre>
+
+      <section class="workspace">
+        <div>
+          <h2 class="agent-title" id="agent-title">Agent</h2>
+          <div class="evidence-list" id="evidence-list"></div>
+        </div>
+        <div>
+          <div class="detail-title" id="detail-title">Details</div>
+          <div class="detail-box" id="detail-box"></div>
+        </div>
       </section>
     </main>
+    <script>
+      const trace = ${json};
+      const state = { agentId: (trace.agents || [])[0]?.id || "", kind: "tools" };
+      const kinds = [
+        ["tools", "Tool calls"],
+        ["prompts", "Prompts"],
+        ["chains", "Model calls"],
+        ["routes", "Routes"],
+        ["risks", "Risks"],
+      ];
+      const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+      const byAgent = (items) => (items || []).filter((item) => item.agentId === state.agentId);
+      const currentAgent = () => (trace.agents || []).find((agent) => agent.id === state.agentId) || null;
+      function rows(kind) {
+        if (kind === "tools") return byAgent(trace.tools).map((tool) => ({ meta: tool.sideEffect ? "side-effect tool" : "tool", title: tool.name, code: tool.schema + " · " + tool.file + ":" + tool.line }));
+        if (kind === "prompts") return byAgent(trace.prompts).map((prompt) => ({ meta: prompt.kind, title: prompt.preview, code: prompt.file + ":" + prompt.line }));
+        if (kind === "chains") return byAgent(trace.chains).map((chain) => ({ meta: chain.type, title: chain.model, code: chain.file + ":" + chain.line + " · tools: " + ((chain.tools || []).join(", ") || "none") }));
+        if (kind === "routes") return [...byAgent(trace.routes).map((route) => ({ meta: route.kind, title: route.file, code: "methods: " + ((route.methods || []).join(", ") || "unknown") + " · AI: " + ((route.aiPatterns || []).join(", ") || "none") })), ...byAgent(trace.uiEntrypoints).map((entry) => ({ meta: "UI entry", title: entry.hook, code: entry.file + ":" + entry.line + " · API: " + entry.api }))];
+        return byAgent(trace.risks).map((risk) => ({ meta: risk.severity + " / " + risk.kind, title: risk.message, code: risk.file + ":" + risk.line }));
+      }
+      function count(kind) {
+        if (kind === "routes") return byAgent(trace.routes).length + byAgent(trace.uiEntrypoints).length;
+        return rows(kind).length;
+      }
+      function render() {
+        const agent = currentAgent();
+        const summary = [
+          ["Agents", trace.summary?.agents || 0],
+          ["Prompts", trace.summary?.prompts || 0],
+          ["Tool calls", trace.summary?.tools || 0],
+          ["Model calls", trace.summary?.chains || 0],
+          ["Routes", (trace.summary?.routes || 0) + (trace.summary?.uiEntrypoints || 0)],
+          ["Risks", trace.summary?.risks || 0],
+        ];
+        document.querySelector("#summary").innerHTML = summary.map(([label, value]) => '<div class="metric"><strong>' + escapeHtml(value) + '</strong><span>' + escapeHtml(label) + '</span></div>').join("");
+        document.querySelector("#agents").innerHTML = (trace.agents || []).map((item) => '<button type="button" class="agent-button ' + (item.id === state.agentId ? "active" : "") + '" data-agent="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + '</button>').join("") || '<p class="empty">No agent candidates detected.</p>';
+        document.querySelectorAll("[data-agent]").forEach((button) => button.addEventListener("click", () => { state.agentId = button.dataset.agent; render(); }));
+        document.querySelector("#agent-title").textContent = agent ? agent.name : "No agent selected";
+        document.querySelector("#evidence-list").innerHTML = kinds.map(([kind, label]) => '<button type="button" class="evidence-button ' + (kind === state.kind ? "active" : "") + '" data-kind="' + kind + '">' + label + '<small>' + count(kind) + ' detected</small></button>').join("");
+        document.querySelectorAll("[data-kind]").forEach((button) => button.addEventListener("click", () => { state.kind = button.dataset.kind; render(); }));
+        const label = kinds.find(([kind]) => kind === state.kind)?.[1] || "Details";
+        document.querySelector("#detail-title").textContent = label + " info";
+        const detailRows = rows(state.kind);
+        document.querySelector("#detail-box").innerHTML = detailRows.map((row) => '<div class="row"><span>' + escapeHtml(row.meta) + '</span><strong>' + escapeHtml(row.title) + '</strong><code>' + escapeHtml(row.code) + '</code></div>').join("") || '<p class="empty">No ' + escapeHtml(label.toLowerCase()) + ' detected for this agent.</p>';
+      }
+      render();
+    </script>
   </body>
 </html>
 `;
 }
 
-function renderNextPage(trace) {
-  const selected = trace.selection.selectedAgent
-    ? `${trace.selection.selectedAgent.name} (${trace.selection.selectedAgent.id})`
-    : "All detected agents";
+function renderSimpleNextPage(trace) {
   const data = {
     generatedAt: trace.generatedAt,
-    selected,
+    selected: trace.selection.label || "All detected agents",
     summary: trace.summary,
-    agents: trace.agents.slice(0, 10),
-    routes: trace.routes.slice(0, 8),
-    chains: trace.chains.slice(0, 8),
-    tools: trace.tools.slice(0, 8),
-    risks: trace.risks.slice(0, 10),
+    agents: trace.agents,
+    prompts: trace.prompts,
+    tools: trace.tools,
+    chains: trace.chains,
+    routes: trace.routes,
+    uiEntrypoints: trace.uiEntrypoints,
+    risks: trace.risks,
   };
-  return `/* Generated by agent-observe-skill. Re-run skill.sh to refresh. */
-const data = ${JSON.stringify(data, null, 2)} as const;
+  return `"use client";
 
-const colors = {
-  bg: "#f6f7f3",
-  panel: "#ffffff",
-  ink: "#171a16",
-  muted: "#5d675c",
-  line: "#d7ddd2",
-  green: "#1b7c55",
-  blue: "#2359a6",
-  amber: "#a96d11",
-  red: "#b4372f",
-  violet: "#6a4cad",
-};
+/* Generated by agent-observe-skill. Re-run skill.sh to refresh. */
+import { useMemo, useState } from "react";
 
-function Card({ label, value }: { label: string; value: number }) {
-  return (
-    <div style={{ border: \`1px solid \${colors.line}\`, borderRadius: 8, background: colors.panel, padding: 14 }}>
-      <span style={{ color: colors.muted, fontSize: 12, textTransform: "uppercase", letterSpacing: ".08em" }}>{label}</span>
-      <strong style={{ display: "block", fontSize: 28 }}>{value}</strong>
-    </div>
-  );
-}
+const data = ${JSON.stringify(data, null, 2)} as any;
 
-function Node({ type, title, meta, color }: { type: string; title: string; meta: string; color: string }) {
-  return (
-    <div style={{ border: \`1px solid \${colors.line}\`, borderLeft: \`5px solid \${color}\`, borderRadius: 8, background: colors.panel, padding: 12 }}>
-      <span style={{ color: colors.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: ".08em" }}>{type}</span>
-      <strong style={{ display: "block", marginTop: 6 }}>{title}</strong>
-      <code style={{ display: "block", marginTop: 8, color: colors.muted, overflowWrap: "anywhere", fontSize: 12 }}>{meta}</code>
-    </div>
-  );
+const colors = { bg: "#f7f8f5", panel: "#fff", ink: "#171a16", muted: "#637063", line: "#d7ddd2", blue: "#2f80ed" };
+const kinds = [["tools", "Tool calls"], ["prompts", "Prompts"], ["chains", "Model calls"], ["routes", "Routes"], ["risks", "Risks"]] as const;
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return <div style={{ border: "1px solid " + colors.line, borderRadius: 7, padding: 14, background: "#fbfcf9", textAlign: "center" }}><strong style={{ display: "block", fontSize: 28 }}>{value}</strong><span style={{ color: colors.muted, fontSize: 12 }}>{label}</span></div>;
 }
 
 export default function AgentObserveSkillPage() {
-  const cards = [
-    ["Agents", data.summary.agents],
-    ["Prompts", data.summary.prompts],
-    ["Tools", data.summary.tools],
-    ["Chains", data.summary.chains],
-    ["Routes", data.summary.routes],
-    ["UI Entries", data.summary.uiEntrypoints],
-    ["Risks", data.summary.risks],
-  ] as const;
-
+  const [agentId, setAgentId] = useState<string>(data.agents[0]?.id || "");
+  const [kind, setKind] = useState<string>("tools");
+  const agent = data.agents.find((item: any) => item.id === agentId);
+  const byAgent = (items: any[]) => (items || []).filter((item: any) => item.agentId === agentId);
+  const rows = useMemo(() => {
+    if (kind === "tools") return byAgent(data.tools).map((tool: any) => ({ meta: tool.sideEffect ? "side-effect tool" : "tool", title: tool.name, code: tool.schema + " · " + tool.file + ":" + tool.line }));
+    if (kind === "prompts") return byAgent(data.prompts).map((prompt: any) => ({ meta: prompt.kind, title: prompt.preview, code: prompt.file + ":" + prompt.line }));
+    if (kind === "chains") return byAgent(data.chains).map((chain: any) => ({ meta: chain.type, title: chain.model, code: chain.file + ":" + chain.line + " · tools: " + ((chain.tools || []).join(", ") || "none") }));
+    if (kind === "routes") return [...byAgent(data.routes).map((route: any) => ({ meta: route.kind, title: route.file, code: "methods: " + ((route.methods || []).join(", ") || "unknown") + " · AI: " + ((route.aiPatterns || []).join(", ") || "none") })), ...byAgent(data.uiEntrypoints).map((entry: any) => ({ meta: "UI entry", title: entry.hook, code: entry.file + ":" + entry.line + " · API: " + entry.api }))];
+    return byAgent(data.risks).map((risk: any) => ({ meta: risk.severity + " / " + risk.kind, title: risk.message, code: risk.file + ":" + risk.line }));
+  }, [agentId, kind]);
+  const count = (item: string) => item === "routes" ? byAgent(data.routes).length + byAgent(data.uiEntrypoints).length : (item === "tools" ? byAgent(data.tools).length : item === "prompts" ? byAgent(data.prompts).length : item === "chains" ? byAgent(data.chains).length : byAgent(data.risks).length);
+  const activeLabel = kinds.find(([item]) => item === kind)?.[1] || "Details";
+  const summary = [["Agents", data.summary.agents], ["Prompts", data.summary.prompts], ["Tool calls", data.summary.tools], ["Model calls", data.summary.chains], ["Routes", data.summary.routes + data.summary.uiEntrypoints], ["Risks", data.summary.risks]] as const;
   return (
-    <main style={{ minHeight: "100vh", background: colors.bg, color: colors.ink, padding: 28, display: "grid", gap: 18 }}>
-      <header style={{ display: "flex", justifyContent: "space-between", gap: 18, alignItems: "flex-end", borderBottom: \`1px solid \${colors.line}\`, paddingBottom: 18 }}>
-        <div>
-          <h1 style={{ margin: 0, maxWidth: 780, fontSize: "clamp(34px, 6vw, 72px)", lineHeight: ".95", letterSpacing: 0 }}>Agent Observe Report</h1>
-          <p style={{ margin: "10px 0 0", color: colors.muted }}>Selected agent: <strong>{data.selected}</strong></p>
-        </div>
-        <p style={{ maxWidth: 340, margin: 0, color: colors.muted, borderLeft: \`3px solid \${colors.green}\`, paddingLeft: 12 }}>Generated locally at <code>{data.generatedAt}</code>.</p>
-      </header>
-      <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10 }}>
-        {cards.map(([label, value]) => <Card key={label} label={label} value={value} />)}
-      </section>
-      <section style={{ border: \`1px solid \${colors.line}\`, borderRadius: 8, background: colors.panel, padding: 18 }}>
-        <h2 style={{ margin: "0 0 10px" }}>Chain Map</h2>
-        <p style={{ margin: "0 0 16px", color: colors.muted }}>Detected routes, model calls, tools, and risks.</p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
-          {data.routes.map((route) => <Node key={route.id} type="Route" title={route.file} meta={(route.aiPatterns || []).join(", ") || "No AI pattern"} color={colors.amber} />)}
-          {data.chains.map((chain) => <Node key={chain.id} type={chain.type} title={chain.model} meta={\`\${chain.file}:\${chain.line}\`} color={colors.violet} />)}
-          {data.tools.map((tool) => <Node key={tool.id} type="Tool" title={tool.name} meta={tool.schema} color={colors.green} />)}
-          {data.risks.map((risk) => <Node key={risk.id} type={\`\${risk.severity} risk\`} title={risk.kind} meta={\`\${risk.file}:\${risk.line}\`} color={colors.red} />)}
-        </div>
-      </section>
-      <section style={{ border: \`1px solid \${colors.line}\`, borderRadius: 8, background: colors.panel, padding: 18 }}>
-        <h2 style={{ margin: "0 0 10px" }}>Agents</h2>
-        <div style={{ display: "grid", gap: 10 }}>
-          {data.agents.length ? data.agents.map((agent) => (
-            <div key={agent.id} style={{ borderTop: \`1px solid \${colors.line}\`, paddingTop: 10 }}>
-              <span style={{ color: colors.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: ".08em" }}>{agent.id}</span>
-              <strong style={{ display: "block", marginTop: 6 }}>{agent.name}</strong>
-              <code style={{ display: "block", marginTop: 8, color: colors.muted, overflowWrap: "anywhere", fontSize: 12 }}>{(agent.files || []).join(", ")}</code>
-            </div>
-          )) : <p style={{ color: colors.muted }}>No agent candidates detected.</p>}
-        </div>
-      </section>
+    <main style={{ minHeight: "100vh", background: colors.bg, color: colors.ink, padding: 28 }}>
+      <div style={{ maxWidth: 1040, margin: "0 auto", display: "grid", gap: 22 }}>
+        <header style={{ display: "flex", justifyContent: "space-between", gap: 18, alignItems: "end", borderBottom: "1px solid " + colors.line, paddingBottom: 18 }}>
+          <div><h1 style={{ margin: 0, fontSize: "clamp(34px, 6vw, 64px)", lineHeight: .96 }}>Agent Observe Report</h1><p style={{ margin: "8px 0 0", color: colors.muted }}>Initial scan scope: <strong>{data.selected}</strong></p></div>
+          <p style={{ maxWidth: 330, margin: 0, color: colors.muted, borderLeft: "3px solid #1b7c55", paddingLeft: 12 }}>Your code stayed local. Generated at <code>{data.generatedAt}</code>.</p>
+        </header>
+        <section style={{ border: "1px solid " + colors.line, borderRadius: 8, background: colors.panel, padding: 18 }}>
+          <h2 style={{ margin: "0 0 12px" }}>Overall</h2>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 10 }}>{summary.map(([label, value]) => <Metric key={label} label={label} value={value} />)}</div>
+        </section>
+        <section style={{ border: "1px solid " + colors.line, borderRadius: 8, background: colors.panel, padding: 18 }}>
+          <h2 style={{ margin: "0 0 12px" }}>Agents</h2>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center" }}>{data.agents.map((item: any) => <button key={item.id} type="button" onClick={() => setAgentId(item.id)} style={{ minWidth: 150, border: "2px solid " + (item.id === agentId ? colors.blue : "#1f271d"), borderRadius: 8, background: "#fff", color: item.id === agentId ? colors.blue : colors.ink, padding: "16px 18px", cursor: "pointer", font: "inherit", fontWeight: 760 }}>{item.name}</button>)}</div>
+        </section>
+        <section style={{ border: "1px solid " + colors.line, borderRadius: 8, background: colors.panel, padding: 18, display: "grid", gridTemplateColumns: "minmax(260px, .95fr) minmax(300px, 1.05fr)", gap: 28 }}>
+          <div><h2 style={{ color: colors.blue, textAlign: "center", fontSize: 30, margin: "0 0 22px" }}>{agent?.name || "No agent selected"}</h2><div style={{ display: "grid", gap: 12 }}>{kinds.map(([item, label]) => <button key={item} type="button" onClick={() => setKind(item)} style={{ width: "100%", border: "2px solid " + (item === kind ? colors.blue : "#1f271d"), borderRadius: 7, background: "#fff", color: item === kind ? colors.blue : colors.ink, padding: 18, cursor: "pointer", font: "inherit", fontWeight: 760 }}>{label}<small style={{ display: "block", marginTop: 4, color: colors.muted, fontWeight: 500 }}>{count(item)} detected</small></button>)}</div></div>
+          <div><div style={{ textAlign: "center", marginBottom: 12, fontWeight: 760 }}>{activeLabel} info</div><div style={{ minHeight: 260, border: "2px solid " + colors.blue, borderRadius: 7, background: "#fff", padding: 18, display: "grid", gap: 12, alignContent: "start" }}>{rows.length ? rows.map((row: any, index: number) => <div key={index} style={{ borderTop: index ? "1px solid " + colors.line : 0, paddingTop: index ? 10 : 0 }}><span style={{ display: "block", color: colors.muted, fontSize: 11, letterSpacing: ".08em", textTransform: "uppercase" }}>{row.meta}</span><strong style={{ display: "block", marginTop: 5 }}>{row.title}</strong><code style={{ display: "block", marginTop: 6, color: colors.muted, fontSize: 12, overflowWrap: "anywhere" }}>{row.code}</code></div>) : <p style={{ color: colors.muted }}>No {activeLabel.toLowerCase()} detected for this agent.</p>}</div></div>
+        </section>
+      </div>
     </main>
   );
 }
@@ -978,7 +1029,7 @@ function maybeWriteNextPage(trace) {
     if (!existing.includes("Generated by agent-observe-skill")) return "";
   }
   fs.mkdirSync(routeDir, { recursive: true });
-  fs.writeFileSync(pagePath, renderNextPage(trace));
+  fs.writeFileSync(pagePath, renderSimpleNextPage(trace));
   return pagePath;
 }
 
@@ -1047,7 +1098,7 @@ write(
 
 const report = `${header("Agent Observe Report")}## Summary
 
-- Agent selection: ${selection.selectedAgent ? `${selection.selectedAgent.name} (${selection.selectedAgent.id})` : "All detected agents"}
+- Agent selection: ${selection.label}
 - Agent candidates detected: ${records.agents.length}
 - Prompts detected: ${records.prompts.length}
 - Tools detected: ${records.tools.length}
@@ -1090,7 +1141,7 @@ ${rows(records.prompts.filter((p) => p.inline), "No inline prompts detected.", (
 
 write("report.md", report);
 const trace = tracePayload(generatedAt);
-write("index.html", renderHtmlReport(trace, report));
+write("index.html", renderSimpleHtmlReport(trace, report));
 write(
   "trace-map.json",
   JSON.stringify(trace, null, 2) + "\n",

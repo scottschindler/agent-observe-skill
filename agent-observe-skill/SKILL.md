@@ -25,7 +25,7 @@ If running from outside the target repo, pass the repo path:
 bash /path/to/agent-observe-skill/scripts/skill.sh /path/to/repo
 ```
 
-If multiple agents are detected and the script is running in an interactive terminal, choose one from the prompt or choose all agents.
+If multiple agents are detected and the script is running in an interactive terminal, choose one, multiple comma-separated agents, or all agents from the prompt.
 
 For non-interactive use, list candidates first:
 
@@ -33,13 +33,18 @@ For non-interactive use, list candidates first:
 bash /path/to/agent-observe-skill/scripts/skill.sh /path/to/repo --list-agents
 ```
 
-Then scan one candidate by id or name:
+Then scan one or more candidates by id or name:
 
 ```bash
 bash /path/to/agent-observe-skill/scripts/skill.sh /path/to/repo --agent checkout
+bash /path/to/agent-observe-skill/scripts/skill.sh /path/to/repo --agent checkout,billing
 ```
 
+When using this skill inside Codex, run `--list-agents` before the full scan unless the user already specified an agent scope. If more than one candidate is listed, ask the user whether to analyze all agents, one agent, or multiple agents. Then run the scan with no `--agent` flag for all agents or with `--agent id1,id2` for a selected subset.
+
 After it runs, read `.agent-observe-skill/report.md` first and open `.agent-observe-skill/index.html` for the visual report. In Next.js App Router repos, the scanner also creates `app/agent-observe-skill/page.tsx` so the report is available at `/agent-observe-skill`.
+
+The visual report is intentionally simple: overall counts, agent buttons, evidence buttons, and one detail panel. Users can select an agent, then inspect tool calls, prompts, model calls, routes, and risks locally.
 
 Generated report artifacts are local-only by default. The scanner adds `.agent-observe-skill/` and, when generated, `app/agent-observe-skill/` to the target repo's `.git/info/exclude` file instead of `.gitignore`, so normal `git add .` will not commit them.
 
@@ -93,12 +98,14 @@ Make sure the final answer reflects the report's answers to:
 
 ## Workflow
 
-1. Run `scripts/skill.sh` against the target repo.
-2. Confirm `.agent-observe-skill/index.html`, `.agent-observe-skill/report.md`, and `.agent-observe-skill/trace-map.json` exist.
-3. Read the summary counts from `trace-map.json`.
-4. If `app/agent-observe-skill/page.tsx` was generated, tell the user the app route is available at `/agent-observe-skill` after their dev server reloads.
-5. Read `report.md`, `risks.md`, and any focused file the user asks about.
-6. Summarize findings with file references and separate detected evidence from static-analysis limitations.
+1. Unless the user already specified all agents or specific agents, run `scripts/skill.sh --list-agents` against the target repo.
+2. If more than one candidate is listed, ask the user to choose all agents, one agent, or multiple agents.
+3. Run `scripts/skill.sh` against the target repo, using `--agent id1,id2` only when the user selected a subset.
+4. Confirm `.agent-observe-skill/index.html`, `.agent-observe-skill/report.md`, and `.agent-observe-skill/trace-map.json` exist.
+5. Read the summary counts from `trace-map.json`.
+6. If `app/agent-observe-skill/page.tsx` was generated, tell the user the app route is available at `/agent-observe-skill` after their dev server reloads and includes the simplified per-agent evidence UI.
+7. Read `report.md`, `risks.md`, and any focused file the user asks about.
+8. Summarize findings with file references and separate detected evidence from static-analysis limitations.
 
 ## Limitations
 
