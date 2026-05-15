@@ -46,11 +46,32 @@ ROOT="${ROOT:-$(pwd)}"
 ROOT="$(cd "$ROOT" 2>/dev/null && pwd)"
 OUT_DIR="$ROOT/.agent-observe-skill"
 SELF_PATH="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
+GIT_EXCLUDE=""
+if command -v git >/dev/null 2>&1; then
+  GIT_EXCLUDE="$(git -C "$ROOT" rev-parse --git-path info/exclude 2>/dev/null || true)"
+  if [ -n "$GIT_EXCLUDE" ] && [ "${GIT_EXCLUDE#/}" = "$GIT_EXCLUDE" ]; then
+    GIT_EXCLUDE="$ROOT/$GIT_EXCLUDE"
+  fi
+fi
 
 mkdir -p "$OUT_DIR"
 
 say() {
   printf '%s\n' "$*"
+}
+
+add_local_git_exclude() {
+  [ -n "$GIT_EXCLUDE" ] || return 0
+  mkdir -p "$(dirname "$GIT_EXCLUDE")"
+  touch "$GIT_EXCLUDE"
+  if ! grep -qxF "# Agent Observe generated artifacts" "$GIT_EXCLUDE"; then
+    printf '\n# Agent Observe generated artifacts\n' >> "$GIT_EXCLUDE"
+  fi
+  for pattern in "$@"; do
+    if ! grep -qxF "$pattern" "$GIT_EXCLUDE"; then
+      printf '%s\n' "$pattern" >> "$GIT_EXCLUDE"
+    fi
+  done
 }
 
 INTERACTIVE=0
@@ -62,6 +83,7 @@ if command -v node >/dev/null 2>&1; then
   SKILL_SELF="$SELF_PATH" AGENT_OBSERVE_AGENT="$AGENT_FILTER" AGENT_OBSERVE_LIST="$LIST_AGENTS" AGENT_OBSERVE_INTERACTIVE="$INTERACTIVE" node - "$ROOT" "$OUT_DIR" <<'NODE'
 const fs = require("fs");
 const path = require("path");
+const childProcess = require("child_process");
 
 const root = process.argv[2];
 const outDir = process.argv[3];
@@ -670,6 +692,296 @@ function write(name, body) {
   fs.writeFileSync(path.join(outDir, name), body);
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function summaryCards(summary) {
+  return [
+    ["Agents", summary.agents],
+    ["Prompts", summary.prompts],
+    ["Tools", summary.tools],
+    ["Chains", summary.chains],
+    ["Routes", summary.routes],
+    ["UI Entries", summary.uiEntrypoints],
+    ["Risks", summary.risks],
+  ];
+}
+
+function renderList(items, empty, render) {
+  if (!items.length) return `<p class="empty">${escapeHtml(empty)}</p>`;
+  return `<div class="list">${items.map(render).join("")}</div>`;
+}
+
+function tracePayload(generatedAt) {
+  return {
+    generatedAt,
+    root,
+    scanner: "agent-observe-skill.sh",
+    selection,
+    summary: {
+      agents: records.agents.length,
+      prompts: records.prompts.length,
+      tools: records.tools.length,
+      chains: records.chains.length,
+      routes: records.routes.length,
+      uiEntrypoints: records.uiEntrypoints.length,
+      risks: records.risks.length,
+    },
+    ...records,
+  };
+}
+
+function renderHtmlReport(trace, report) {
+  const selected = trace.selection.selectedAgent
+    ? `${trace.selection.selectedAgent.name} (${trace.selection.selectedAgent.id})`
+    : "All detected agents";
+  const topRisks = trace.risks.slice(0, 8);
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Observe Report</title>
+    <style>
+      :root { color-scheme: light; --bg: #f6f7f3; --panel: #fff; --ink: #171a16; --muted: #5d675c; --line: #d7ddd2; --green: #1b7c55; --blue: #2359a6; --amber: #a96d11; --red: #b4372f; --violet: #6a4cad; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--ink); }
+      main { display: grid; gap: 18px; padding: 28px; }
+      header { display: flex; justify-content: space-between; gap: 18px; align-items: flex-end; border-bottom: 1px solid var(--line); padding-bottom: 18px; }
+      h1 { margin: 0; max-width: 780px; font-size: clamp(34px, 6vw, 72px); line-height: .95; letter-spacing: 0; }
+      h2 { margin: 0 0 10px; font-size: 18px; letter-spacing: 0; }
+      p { margin: 0; color: var(--muted); line-height: 1.5; }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+      .trust { max-width: 320px; border-left: 3px solid var(--green); padding-left: 12px; }
+      .grid { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)); gap: 10px; }
+      .card, section { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 14px 40px rgba(35, 44, 30, .08); }
+      .card { padding: 14px; }
+      .card strong { display: block; font-size: 28px; }
+      .card span { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+      .columns { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr); gap: 18px; }
+      section { padding: 18px; }
+      .map { min-height: 420px; background: linear-gradient(90deg, rgba(23,26,22,.045) 1px, transparent 1px), linear-gradient(0deg, rgba(23,26,22,.045) 1px, transparent 1px), var(--panel); background-size: 34px 34px; }
+      .nodes { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; }
+      .node { border: 1px solid var(--line); border-left: 5px solid var(--blue); border-radius: 8px; background: rgba(255,255,255,.94); padding: 12px; }
+      .node.tool { border-left-color: var(--green); }
+      .node.chain { border-left-color: var(--violet); }
+      .node.route { border-left-color: var(--amber); }
+      .node.risk { border-left-color: var(--red); }
+      .node .type, .item .meta { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+      .node strong, .item strong { display: block; margin-top: 6px; }
+      .node code, .item code { display: block; margin-top: 8px; color: var(--muted); overflow-wrap: anywhere; font-size: 12px; }
+      .list { display: grid; gap: 10px; }
+      .item { border-top: 1px solid var(--line); padding-top: 10px; }
+      .empty { padding: 12px; background: #f0f3ee; border-radius: 8px; }
+      pre { margin: 0; white-space: pre-wrap; overflow-x: auto; font-size: 12px; line-height: 1.5; color: #edf3ea; background: #101410; border-radius: 8px; padding: 16px; }
+      @media (max-width: 1000px) { .grid, .columns, .nodes { grid-template-columns: 1fr; } header { display: grid; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Agent Observe Report</h1>
+          <p>Selected agent: <strong>${escapeHtml(selected)}</strong></p>
+        </div>
+        <p class="trust">Your code stayed local. This report was generated from static analysis at <code>${escapeHtml(trace.generatedAt)}</code>.</p>
+      </header>
+      <div class="grid">
+        ${summaryCards(trace.summary).map(([label, value]) => `<div class="card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}
+      </div>
+      <div class="columns">
+        <section class="map">
+          <h2>Chain Map</h2>
+          <p>Detected routes, model calls, tools, prompts, and risks.</p>
+          <div class="nodes">
+            ${trace.routes.slice(0, 6).map((route) => `<div class="node route"><span class="type">Route</span><strong>${escapeHtml(route.file)}</strong><code>${escapeHtml((route.aiPatterns || []).join(", ") || "No AI pattern")}</code></div>`).join("")}
+            ${trace.chains.slice(0, 6).map((chain) => `<div class="node chain"><span class="type">${escapeHtml(chain.type)}</span><strong>${escapeHtml(chain.model)}</strong><code>${escapeHtml(chain.file)}:${escapeHtml(chain.line)}</code></div>`).join("")}
+            ${trace.tools.slice(0, 6).map((tool) => `<div class="node tool"><span class="type">Tool</span><strong>${escapeHtml(tool.name)}</strong><code>${escapeHtml(tool.schema)}</code></div>`).join("")}
+            ${topRisks.map((risk) => `<div class="node risk"><span class="type">${escapeHtml(risk.severity)} risk</span><strong>${escapeHtml(risk.kind)}</strong><code>${escapeHtml(risk.file)}:${escapeHtml(risk.line)}</code></div>`).join("")}
+          </div>
+        </section>
+        <section>
+          <h2>Top Risks</h2>
+          ${renderList(topRisks, "No risks detected.", (risk) => `<div class="item"><span class="meta">${escapeHtml(risk.severity)} / ${escapeHtml(risk.kind)}</span><strong>${escapeHtml(risk.message)}</strong><code>${escapeHtml(risk.file)}:${escapeHtml(risk.line)}</code></div>`)}
+        </section>
+      </div>
+      <section>
+        <h2>Agents</h2>
+        ${renderList(trace.agents, "No agent candidates detected.", (agent) => `<div class="item"><span class="meta">${escapeHtml(agent.id)}</span><strong>${escapeHtml(agent.name)}</strong><code>${escapeHtml((agent.files || []).join(", "))}</code></div>`)}
+      </section>
+      <section>
+        <h2>Generated Markdown Report</h2>
+        <pre>${escapeHtml(report)}</pre>
+      </section>
+    </main>
+  </body>
+</html>
+`;
+}
+
+function renderNextPage(trace) {
+  const selected = trace.selection.selectedAgent
+    ? `${trace.selection.selectedAgent.name} (${trace.selection.selectedAgent.id})`
+    : "All detected agents";
+  const data = {
+    generatedAt: trace.generatedAt,
+    selected,
+    summary: trace.summary,
+    agents: trace.agents.slice(0, 10),
+    routes: trace.routes.slice(0, 8),
+    chains: trace.chains.slice(0, 8),
+    tools: trace.tools.slice(0, 8),
+    risks: trace.risks.slice(0, 10),
+  };
+  return `/* Generated by agent-observe-skill. Re-run skill.sh to refresh. */
+const data = ${JSON.stringify(data, null, 2)} as const;
+
+const colors = {
+  bg: "#f6f7f3",
+  panel: "#ffffff",
+  ink: "#171a16",
+  muted: "#5d675c",
+  line: "#d7ddd2",
+  green: "#1b7c55",
+  blue: "#2359a6",
+  amber: "#a96d11",
+  red: "#b4372f",
+  violet: "#6a4cad",
+};
+
+function Card({ label, value }: { label: string; value: number }) {
+  return (
+    <div style={{ border: \`1px solid \${colors.line}\`, borderRadius: 8, background: colors.panel, padding: 14 }}>
+      <span style={{ color: colors.muted, fontSize: 12, textTransform: "uppercase", letterSpacing: ".08em" }}>{label}</span>
+      <strong style={{ display: "block", fontSize: 28 }}>{value}</strong>
+    </div>
+  );
+}
+
+function Node({ type, title, meta, color }: { type: string; title: string; meta: string; color: string }) {
+  return (
+    <div style={{ border: \`1px solid \${colors.line}\`, borderLeft: \`5px solid \${color}\`, borderRadius: 8, background: colors.panel, padding: 12 }}>
+      <span style={{ color: colors.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: ".08em" }}>{type}</span>
+      <strong style={{ display: "block", marginTop: 6 }}>{title}</strong>
+      <code style={{ display: "block", marginTop: 8, color: colors.muted, overflowWrap: "anywhere", fontSize: 12 }}>{meta}</code>
+    </div>
+  );
+}
+
+export default function AgentObserveSkillPage() {
+  const cards = [
+    ["Agents", data.summary.agents],
+    ["Prompts", data.summary.prompts],
+    ["Tools", data.summary.tools],
+    ["Chains", data.summary.chains],
+    ["Routes", data.summary.routes],
+    ["UI Entries", data.summary.uiEntrypoints],
+    ["Risks", data.summary.risks],
+  ] as const;
+
+  return (
+    <main style={{ minHeight: "100vh", background: colors.bg, color: colors.ink, padding: 28, display: "grid", gap: 18 }}>
+      <header style={{ display: "flex", justifyContent: "space-between", gap: 18, alignItems: "flex-end", borderBottom: \`1px solid \${colors.line}\`, paddingBottom: 18 }}>
+        <div>
+          <h1 style={{ margin: 0, maxWidth: 780, fontSize: "clamp(34px, 6vw, 72px)", lineHeight: ".95", letterSpacing: 0 }}>Agent Observe Report</h1>
+          <p style={{ margin: "10px 0 0", color: colors.muted }}>Selected agent: <strong>{data.selected}</strong></p>
+        </div>
+        <p style={{ maxWidth: 340, margin: 0, color: colors.muted, borderLeft: \`3px solid \${colors.green}\`, paddingLeft: 12 }}>Generated locally at <code>{data.generatedAt}</code>.</p>
+      </header>
+      <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10 }}>
+        {cards.map(([label, value]) => <Card key={label} label={label} value={value} />)}
+      </section>
+      <section style={{ border: \`1px solid \${colors.line}\`, borderRadius: 8, background: colors.panel, padding: 18 }}>
+        <h2 style={{ margin: "0 0 10px" }}>Chain Map</h2>
+        <p style={{ margin: "0 0 16px", color: colors.muted }}>Detected routes, model calls, tools, and risks.</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+          {data.routes.map((route) => <Node key={route.id} type="Route" title={route.file} meta={(route.aiPatterns || []).join(", ") || "No AI pattern"} color={colors.amber} />)}
+          {data.chains.map((chain) => <Node key={chain.id} type={chain.type} title={chain.model} meta={\`\${chain.file}:\${chain.line}\`} color={colors.violet} />)}
+          {data.tools.map((tool) => <Node key={tool.id} type="Tool" title={tool.name} meta={tool.schema} color={colors.green} />)}
+          {data.risks.map((risk) => <Node key={risk.id} type={\`\${risk.severity} risk\`} title={risk.kind} meta={\`\${risk.file}:\${risk.line}\`} color={colors.red} />)}
+        </div>
+      </section>
+      <section style={{ border: \`1px solid \${colors.line}\`, borderRadius: 8, background: colors.panel, padding: 18 }}>
+        <h2 style={{ margin: "0 0 10px" }}>Agents</h2>
+        <div style={{ display: "grid", gap: 10 }}>
+          {data.agents.length ? data.agents.map((agent) => (
+            <div key={agent.id} style={{ borderTop: \`1px solid \${colors.line}\`, paddingTop: 10 }}>
+              <span style={{ color: colors.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: ".08em" }}>{agent.id}</span>
+              <strong style={{ display: "block", marginTop: 6 }}>{agent.name}</strong>
+              <code style={{ display: "block", marginTop: 8, color: colors.muted, overflowWrap: "anywhere", fontSize: 12 }}>{(agent.files || []).join(", ")}</code>
+            </div>
+          )) : <p style={{ color: colors.muted }}>No agent candidates detected.</p>}
+        </div>
+      </section>
+    </main>
+  );
+}
+`;
+}
+
+function gitRelative(filePath) {
+  return path.relative(root, filePath).split(path.sep).join("/");
+}
+
+function gitPath(args) {
+  try {
+    const value = childProcess.execFileSync("git", ["-C", root, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (!value) return "";
+    return path.isAbsolute(value) ? value : path.join(root, value);
+  } catch {
+    return "";
+  }
+}
+
+function isGitTracked(relativePath) {
+  try {
+    childProcess.execFileSync("git", ["-C", root, "ls-files", "--error-unmatch", "--", relativePath], {
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function addLocalGitExcludes(patterns) {
+  const excludePath = gitPath(["rev-parse", "--git-path", "info/exclude"]);
+  if (!excludePath) return "";
+  fs.mkdirSync(path.dirname(excludePath), { recursive: true });
+  const existing = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, "utf8") : "";
+  const lines = new Set(existing.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+  const missing = patterns.filter((pattern) => !lines.has(pattern));
+  if (!missing.length) return excludePath;
+  const prefix = existing.endsWith("\n") || existing.length === 0 ? "" : "\n";
+  const header = lines.has("# Agent Observe generated artifacts") ? "" : "# Agent Observe generated artifacts\n";
+  fs.appendFileSync(excludePath, `${prefix}${header}${missing.join("\n")}\n`);
+  return excludePath;
+}
+
+function maybeWriteNextPage(trace) {
+  const appDir = path.join(root, "app");
+  if (!fs.existsSync(appDir) || !fs.statSync(appDir).isDirectory()) return "";
+  const routeDir = path.join(appDir, "agent-observe-skill");
+  const pagePath = path.join(routeDir, "page.tsx");
+  if (isGitTracked(gitRelative(pagePath))) return "";
+  if (fs.existsSync(pagePath)) {
+    const existing = fs.readFileSync(pagePath, "utf8");
+    if (!existing.includes("Generated by agent-observe-skill")) return "";
+  }
+  fs.mkdirSync(routeDir, { recursive: true });
+  fs.writeFileSync(pagePath, renderNextPage(trace));
+  return pagePath;
+}
+
 const generatedAt = new Date().toISOString();
 const header = (title) => `# ${title}\n\nGenerated ${generatedAt} from \`${root}\`.\n\n`;
 
@@ -777,32 +1089,22 @@ ${rows(records.prompts.filter((p) => p.inline), "No inline prompts detected.", (
 `;
 
 write("report.md", report);
+const trace = tracePayload(generatedAt);
+write("index.html", renderHtmlReport(trace, report));
 write(
   "trace-map.json",
-  JSON.stringify(
-    {
-      generatedAt,
-      root,
-      scanner: "agent-observe-skill.sh",
-      selection,
-      summary: {
-        agents: records.agents.length,
-        prompts: records.prompts.length,
-        tools: records.tools.length,
-        chains: records.chains.length,
-        routes: records.routes.length,
-        uiEntrypoints: records.uiEntrypoints.length,
-        risks: records.risks.length,
-      },
-      ...records,
-    },
-    null,
-    2,
-  ) + "\n",
+  JSON.stringify(trace, null, 2) + "\n",
 );
+const nextPagePath = maybeWriteNextPage(trace);
+const excludePatterns = [".agent-observe-skill/"];
+if (nextPagePath) excludePatterns.push("app/agent-observe-skill/");
+const excludePath = addLocalGitExcludes(excludePatterns);
 
 console.log(`Agent Observe report written to ${outDir}`);
 console.log(`Open ${path.join(outDir, "report.md")}`);
+console.log(`Open ${path.join(outDir, "index.html")} for the visual report`);
+if (nextPagePath) console.log(`Next.js page written to ${nextPagePath}`);
+if (excludePath) console.log(`Generated artifacts are locally ignored via ${excludePath}`);
 NODE
   exit $?
 fi
@@ -814,6 +1116,7 @@ CHAINS="$OUT_DIR/chains.md"
 ROUTES="$OUT_DIR/routes.md"
 RISKS="$OUT_DIR/risks.md"
 TRACE="$OUT_DIR/trace-map.json"
+INDEX="$OUT_DIR/index.html"
 
 if [ "$LIST_AGENTS" = "1" ]; then
   say "Detected agent candidates:"
@@ -940,5 +1243,40 @@ cat > "$TRACE" <<JSON
 }
 JSON
 
+cat > "$INDEX" <<HTML
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Observe Report</title>
+    <style>
+      body { margin: 0; padding: 28px; background: #f6f7f3; color: #171a16; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      main { display: grid; gap: 18px; }
+      section { border: 1px solid #d7ddd2; border-radius: 8px; background: #fff; padding: 18px; }
+      h1 { margin: 0; font-size: clamp(34px, 6vw, 72px); line-height: .95; }
+      pre { margin: 0; white-space: pre-wrap; overflow-x: auto; color: #edf3ea; background: #101410; border-radius: 8px; padding: 16px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Agent Observe Report</h1>
+      <section>
+        <p>Node was not available, so this visual report uses the Bash fallback output.</p>
+        <p>Open <code>report.md</code>, <code>prompts.md</code>, <code>tools.md</code>, <code>chains.md</code>, <code>routes.md</code>, and <code>risks.md</code> for details.</p>
+      </section>
+      <section>
+        <h2>Generated Report</h2>
+        <pre>$(sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' "$REPORT")</pre>
+      </section>
+    </main>
+  </body>
+</html>
+HTML
+
+add_local_git_exclude ".agent-observe-skill/"
+
 say "Agent Observe report written to $OUT_DIR"
 say "Open $REPORT"
+say "Open $INDEX for the visual report"
+[ -n "$GIT_EXCLUDE" ] && say "Generated artifacts are locally ignored via $GIT_EXCLUDE"

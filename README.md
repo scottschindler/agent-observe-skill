@@ -6,41 +6,101 @@ Agent Observe Skill is a local scanner for AI-agent codebases. It looks for Verc
 
 ## Use With Codex
 
-Codex can discover this skill directly from the repo through:
+For Codex, the simplest repo-scoped install is to put the skill folder in the target repo at:
 
 ```text
-.agents/skills/agent-observe-skill
+.agents/skills/agent-observe-skill/
 ```
 
-That path is a symlink to the canonical skill folder:
+Codex scans `.agents/skills` from your working directory up to the repo root. After the folder is present, Codex can invoke the skill explicitly with `$agent-observe-skill`.
 
-```text
-agent-observe-skill/
-├── SKILL.md
-├── agents/openai.yaml
-├── index.html
-└── scripts/skill.sh
+### Add To A Codex Repo
+
+From the root of the repo you want to scan, run:
+
+```bash
+tmpdir=$(mktemp -d)
+git clone --depth 1 https://github.com/scottschindler/agent-observe-skill.git "$tmpdir/agent-observe-skill"
+mkdir -p .agents/skills
+rm -rf .agents/skills/agent-observe-skill
+cp -R "$tmpdir/agent-observe-skill/agent-observe-skill" .agents/skills/agent-observe-skill
+rm -rf "$tmpdir"
 ```
 
-When you open this repository in Codex CLI, the IDE extension, or the Codex app, invoke it explicitly:
+Commit the skill with your repo if you want everyone on the project to have it:
+
+```bash
+git add .agents/skills/agent-observe-skill
+git commit -m "Add agent observe Codex skill"
+```
+
+Then start or restart Codex from that repo and ask:
 
 ```text
 Use $agent-observe-skill to scan this repo for prompts, tools, chains, routes, eval gaps, and trace risks.
 ```
 
-Codex can also invoke it implicitly when your request matches the skill description.
-
-To install it into your user-level Codex skills from GitHub, ask Codex:
+Codex should generate and summarize:
 
 ```text
-Use $skill-installer to install scottschindler/agent-observe-skill from path agent-observe-skill.
+.agent-observe-skill/index.html
+.agent-observe-skill/report.md
+.agent-observe-skill/trace-map.json
 ```
 
-Restart Codex if the newly installed skill does not appear immediately.
+In a Next.js App Router repo, the scanner also creates:
 
-## Install With skills.sh
+```text
+app/agent-observe-skill/page.tsx
+```
 
-After this repo is published to GitHub, install it into your agent environment:
+After the dev server reloads, open:
+
+```text
+/agent-observe-skill
+```
+
+The generated report files are local-only by default. The scanner adds these paths to the target repo's `.git/info/exclude`, not `.gitignore`, so they do not show up in normal `git status` output and are not committed by `git add .`:
+
+```text
+.agent-observe-skill/
+app/agent-observe-skill/
+```
+
+Only force-adding them with `git add -f` will include them in a commit.
+
+### Use It In This Repo
+
+This repository already includes the repo-scoped Codex path:
+
+```text
+.agents/skills/agent-observe-skill -> ../../agent-observe-skill
+```
+
+That symlink is only for developing this skill in this repository. Target repos should copy the actual skill folder into `.agents/skills/agent-observe-skill/`.
+
+### Optional: Install As A Personal Codex Skill
+
+If you want the skill available in every Codex repo on your machine, copy it to your user skills folder instead:
+
+```bash
+tmpdir=$(mktemp -d)
+git clone --depth 1 https://github.com/scottschindler/agent-observe-skill.git "$tmpdir/agent-observe-skill"
+mkdir -p "$HOME/.agents/skills"
+rm -rf "$HOME/.agents/skills/agent-observe-skill"
+cp -R "$tmpdir/agent-observe-skill/agent-observe-skill" "$HOME/.agents/skills/agent-observe-skill"
+rm -rf "$tmpdir"
+```
+
+Restart Codex if it does not appear immediately, then ask:
+
+```text
+Use $agent-observe-skill to scan this repo for prompts, tools, chains, routes, eval gaps, and trace risks.
+```
+
+## Install With skills.sh For Other Agents
+
+Use this only for agents shown by the skills.sh installer, such as Claude Code or Aider:
 
 ```bash
 npx skills add scottschindler/agent-observe-skill
@@ -98,6 +158,7 @@ The scanner creates a local output folder in the target repo:
 
 ```text
 .agent-observe-skill/
+├── index.html
 ├── report.md
 ├── prompts.md
 ├── tools.md
@@ -107,7 +168,7 @@ The scanner creates a local output folder in the target repo:
 └── trace-map.json
 ```
 
-Start with `report.md`. Use `trace-map.json` for structured follow-up analysis or visualizations.
+Start with `index.html` for the visual report or `report.md` for the Markdown summary. Use `trace-map.json` for structured follow-up analysis or visualizations. These generated files are added to `.git/info/exclude` so they stay out of ordinary commits.
 
 ## What It Detects
 

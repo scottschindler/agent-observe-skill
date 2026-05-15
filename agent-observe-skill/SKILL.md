@@ -39,7 +39,9 @@ Then scan one candidate by id or name:
 bash /path/to/agent-observe-skill/scripts/skill.sh /path/to/repo --agent checkout
 ```
 
-After it runs, read `.agent-observe-skill/report.md` first, then inspect the focused files as needed.
+After it runs, read `.agent-observe-skill/report.md` first and open `.agent-observe-skill/index.html` for the visual report. In Next.js App Router repos, the scanner also creates `app/agent-observe-skill/page.tsx` so the report is available at `/agent-observe-skill`.
+
+Generated report artifacts are local-only by default. The scanner adds `.agent-observe-skill/` and, when generated, `app/agent-observe-skill/` to the target repo's `.git/info/exclude` file instead of `.gitignore`, so normal `git add .` will not commit them.
 
 ## Output Files
 
@@ -47,6 +49,7 @@ The scanner creates:
 
 ```text
 .agent-observe-skill/
+├── index.html
 ├── report.md
 ├── prompts.md
 ├── tools.md
@@ -56,7 +59,7 @@ The scanner creates:
 └── trace-map.json
 ```
 
-Use `report.md` for the user-facing summary. Use `trace-map.json` when a structured map is needed for follow-up analysis or visualization.
+Use `index.html` for the visual preview and `report.md` for the user-facing summary. Use `trace-map.json` when a structured map is needed for follow-up analysis or visualization.
 
 ## Detection Priorities
 
@@ -91,13 +94,16 @@ Make sure the final answer reflects the report's answers to:
 ## Workflow
 
 1. Run `scripts/skill.sh` against the target repo.
-2. Confirm `.agent-observe-skill/report.md` and `.agent-observe-skill/trace-map.json` exist.
+2. Confirm `.agent-observe-skill/index.html`, `.agent-observe-skill/report.md`, and `.agent-observe-skill/trace-map.json` exist.
 3. Read the summary counts from `trace-map.json`.
-4. Read `report.md`, `risks.md`, and any focused file the user asks about.
-5. Summarize findings with file references and separate detected evidence from static-analysis limitations.
+4. If `app/agent-observe-skill/page.tsx` was generated, tell the user the app route is available at `/agent-observe-skill` after their dev server reloads.
+5. Read `report.md`, `risks.md`, and any focused file the user asks about.
+6. Summarize findings with file references and separate detected evidence from static-analysis limitations.
 
 ## Limitations
 
 This is static analysis. Treat findings as evidence for review, not as proof of runtime behavior.
 
 When Node is available, the scanner uses richer local parsing heuristics. Without Node, it uses a Bash and grep fallback that still writes the same output files but provides less detail.
+
+Git can still commit generated files if a user force-adds them with `git add -f`. Treat the generated UI page and `.agent-observe-skill/` folder as disposable scan output.
