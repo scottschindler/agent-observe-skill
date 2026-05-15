@@ -216,6 +216,32 @@
         gap: 8px;
       }
 
+      .agent-picker {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+      }
+
+      .agent-picker label {
+        color: var(--muted);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .agent-picker select {
+        min-width: 190px;
+        border: 1px solid var(--line-strong);
+        border-radius: 7px;
+        background: #fff;
+        color: var(--ink);
+        padding: 8px 10px;
+        font: inherit;
+        font-size: 13px;
+      }
+
       .legend span {
         display: inline-flex;
         align-items: center;
@@ -676,14 +702,22 @@
             <div class="map-head">
               <div class="map-title">
                 <strong>Preview: generated trace map</strong>
-                <span>Click a node to inspect detected evidence and risks.</span>
+                <span id="map-subtitle">Multiple agents detected. Pick one or scan all.</span>
               </div>
-              <div class="legend" aria-label="Legend">
-                <span style="color: var(--amber)"><i class="dot"></i>Entry</span>
-                <span style="color: var(--blue)"><i class="dot"></i>Prompt</span>
-                <span style="color: var(--violet)"><i class="dot"></i>Model</span>
-                <span style="color: var(--green)"><i class="dot"></i>Tool</span>
-                <span style="color: var(--red)"><i class="dot"></i>Risk</span>
+              <div class="agent-picker">
+                <label for="agent-select">Agent</label>
+                <select id="agent-select">
+                  <option value="all">All agents</option>
+                  <option value="checkout">Checkout assistant</option>
+                  <option value="billing">Billing workflow</option>
+                </select>
+                <div class="legend" aria-label="Legend">
+                  <span style="color: var(--amber)"><i class="dot"></i>Entry</span>
+                  <span style="color: var(--blue)"><i class="dot"></i>Prompt</span>
+                  <span style="color: var(--violet)"><i class="dot"></i>Model</span>
+                  <span style="color: var(--green)"><i class="dot"></i>Tool</span>
+                  <span style="color: var(--red)"><i class="dot"></i>Risk</span>
+                </div>
               </div>
             </div>
             <div class="canvas">
@@ -778,6 +812,10 @@
         <pre># Agent Observe Report
 
 Generated locally from this repository.
+
+## Agent Selection
+- Detected agents: Checkout assistant, Billing workflow.
+- Selected agent: Checkout assistant.
 
 ## Prompts
 - app/api/chat/route.ts:18 system prompt is inline.
@@ -880,6 +918,8 @@ Generated locally from this repository.
       };
 
       const nodes = document.querySelectorAll(".node");
+      const agentSelect = document.querySelector("#agent-select");
+      const mapSubtitle = document.querySelector("#map-subtitle");
       const title = document.querySelector("#inspector-title");
       const copy = document.querySelector("#inspector-copy");
       const file = document.querySelector("#inspector-file");
@@ -906,6 +946,16 @@ Generated locally from this repository.
             }),
           );
         });
+      });
+
+      const agentCopy = {
+        all: "Multiple agents detected. Pick one or scan all.",
+        checkout: "Focused on Checkout assistant: route, chat UI, support prompt, model call, tools, and risks.",
+        billing: "Focused on Billing workflow: generateText chain, billing prompt, refund tool, eval gap, and trace risk.",
+      };
+
+      agentSelect.addEventListener("change", () => {
+        mapSubtitle.textContent = agentCopy[agentSelect.value];
       });
     </script>
   </body>

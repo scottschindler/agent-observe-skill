@@ -1,7 +1,48 @@
 #!/usr/bin/env bash
 set -u
 
-ROOT="${1:-$(pwd)}"
+ROOT=""
+AGENT_FILTER="${AGENT_OBSERVE_AGENT:-}"
+LIST_AGENTS=0
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --agent)
+      AGENT_FILTER="${2:-}"
+      shift 2
+      ;;
+    --agent=*)
+      AGENT_FILTER="${1#--agent=}"
+      shift
+      ;;
+    --list-agents)
+      LIST_AGENTS=1
+      shift
+      ;;
+    --help|-h)
+      cat <<'HELP'
+Usage: bash skill.sh [repo-path] [--agent <agent-name-or-id>] [--list-agents]
+
+Options:
+  --agent <value>   Scan one detected agent. Accepts the shown agent id or name.
+  --list-agents     Print detected agents and exit without writing reports.
+  --help            Show this help.
+HELP
+      exit 0
+      ;;
+    *)
+      if [ -z "$ROOT" ]; then
+        ROOT="$1"
+        shift
+      else
+        say "Unknown argument: $1" >&2
+        exit 1
+      fi
+      ;;
+  esac
+done
+
+ROOT="${ROOT:-$(pwd)}"
 ROOT="$(cd "$ROOT" 2>/dev/null && pwd)"
 OUT_DIR="$ROOT/.agent-observe-skill"
 SELF_PATH="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
@@ -12,14 +53,22 @@ say() {
   printf '%s\n' "$*"
 }
 
+INTERACTIVE=0
+if [ -t 0 ] && [ -t 1 ]; then
+  INTERACTIVE=1
+fi
+
 if command -v node >/dev/null 2>&1; then
-  SKILL_SELF="$SELF_PATH" node - "$ROOT" "$OUT_DIR" <<'NODE'
+  SKILL_SELF="$SELF_PATH" AGENT_OBSERVE_AGENT="$AGENT_FILTER" AGENT_OBSERVE_LIST="$LIST_AGENTS" AGENT_OBSERVE_INTERACTIVE="$INTERACTIVE" node - "$ROOT" "$OUT_DIR" <<'NODE'
 const fs = require("fs");
 const path = require("path");
 
 const root = process.argv[2];
 const outDir = process.argv[3];
 const selfPath = path.resolve(process.env.SKILL_SELF || "");
+const requestedAgent = clean(process.env.AGENT_OBSERVE_AGENT || "");
+const listAgentsOnly = process.env.AGENT_OBSERVE_LIST === "1";
+const interactive = process.env.AGENT_OBSERVE_INTERACTIVE === "1";
 
 const ignoreDirs = new Set([
   ".git",
@@ -49,6 +98,7 @@ const scanExts = new Set([
 ]);
 
 const records = {
+  agents: [],
   prompts: [],
   tools: [],
   chains: [],
@@ -95,6 +145,63 @@ function preview(value, max = 140) {
 
 function id(prefix, file, line, extra = "") {
   return `${prefix}:${rel(file)}:${line}${extra ? `:${extra}` : ""}`;
+}
+
+function slug(value) {
+  const text = clean(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return text || "agent";
+}
+
+function titleCaseSlug(value) {
+  return clean(value)
+    .split(/[-_/.\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ") || "Agent";
+}
+
+function inferAgent(file, text, index = 0, fallback = "agent") {
+  const relative = rel(file);
+  const appRoute = relative.match(/^app\/api\/(.+)\/route\.[cm]?[jt]sx?$/);
+  if (appRoute) {
+    const name = appRoute[1].replace(/\[[^\]]+\]/g, "").replace(/\/+/g, "-") || "api-agent";
+    return { id: `route:${slug(name)}`, name: titleCaseSlug(name), source: "api-route" };
+  }
+  const pagesRoute = relative.match(/^pages\/api\/(.+)\.[cm]?[jt]sx?$/);
+  if (pagesRoute) {
+    const name = pagesRoute[1].replace(/\[[^\]]+\]/g, "").replace(/\/+/g, "-") || "api-agent";
+    return { id: `route:${slug(name)}`, name: titleCaseSlug(name), source: "api-route" };
+  }
+  const before = text.slice(Math.max(0, index - 260), index);
+  const named = before.match(/(?:export\s+)?(?:async\s+function|function|const|let|var)\s+([A-Za-z_$][\w$]*(?:Agent|Chat|Assistant|Chain|Workflow)[A-Za-z_$\w]*)/i);
+  if (named) {
+    return { id: `code:${slug(named[1])}`, name: named[1], source: "code-symbol" };
+  }
+  const base = path.basename(relative).replace(/\.[cm]?[jt]sx?$/, "").replace(/\.mdx$/, "");
+  const dir = path.basename(path.dirname(relative));
+  const name = /^(index|route|page)$/.test(base) ? dir : base;
+  return { id: `file:${slug(name || fallback)}`, name: titleCaseSlug(name || fallback), source: "file" };
+}
+
+const agentMap = new Map();
+
+function registerAgent(agent, file, line, kind) {
+  if (!agent || !agent.id) return "";
+  const current = agentMap.get(agent.id) || {
+    id: agent.id,
+    name: agent.name || agent.id,
+    source: agent.source || "detected",
+    files: new Set(),
+    evidence: [],
+    counts: { prompts: 0, tools: 0, chains: 0, routes: 0, uiEntrypoints: 0, risks: 0 },
+  };
+  current.files.add(rel(file));
+  current.evidence.push({ file: rel(file), line, kind });
+  agentMap.set(agent.id, current);
+  return agent.id;
 }
 
 function read(file) {
@@ -221,7 +328,7 @@ function schemaSummary(snippet) {
   return keys.size ? [...keys].slice(0, 12).join(", ") : preview(schema, 180);
 }
 
-function pushRisk(kind, severity, file, line, message, evidence, targetId = "") {
+function pushRisk(kind, severity, file, line, message, evidence, targetId = "", agentId = "") {
   const risk = {
     id: id("risk", file, line, `${kind}:${records.risks.length + 1}`),
     kind,
@@ -231,6 +338,7 @@ function pushRisk(kind, severity, file, line, message, evidence, targetId = "") 
     message,
     evidence: preview(evidence, 220),
     targetId,
+    agentId,
   };
   records.risks.push(risk);
   return risk;
@@ -241,10 +349,13 @@ const files = walk(root);
 for (const file of files) {
   const text = read(file);
   const relative = rel(file);
+  const fileAgent = inferAgent(file, text, 0);
 
   const isAppRoute = /^app\/api\/.*\/route\.[cm]?[jt]sx?$/.test(relative);
   const isPagesRoute = /^pages\/api\/.*\.[cm]?[jt]sx?$/.test(relative);
   if (isAppRoute || isPagesRoute) {
+    const routeAgent = inferAgent(file, text, 0);
+    const agentId = registerAgent(routeAgent, file, 1, "route");
     const methods = new Set();
     eachMatch(text, /\bexport\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\b/g, (m) => methods.add(m[1]));
     eachMatch(text, /\bexport\s+const\s+(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\b/g, (m) => methods.add(m[1]));
@@ -261,18 +372,26 @@ for (const file of files) {
       methods: [...methods],
       aiPatterns,
       hasTrace: hasTraceEvidence(text),
+      agentId,
     });
   }
 
   eachMatch(text, /\b(useChat|useCompletion|useAssistant)\s*\(/g, (m) => {
     const snippet = extractBalancedCall(text, m.index);
+    const apiValue = preview(extractProperty(snippet, "api") || "Default or indirect API route", 100);
+    const apiMatch = apiValue.match(/\/api\/([A-Za-z0-9_/-]+)/);
+    const uiAgent = apiMatch
+      ? { id: `route:${slug(apiMatch[1])}`, name: titleCaseSlug(apiMatch[1]), source: "client-api" }
+      : inferAgent(file, text, m.index, m[1]);
+    const agentId = registerAgent(uiAgent, file, lineOf(text, m.index), "ui");
     records.uiEntrypoints.push({
       id: id("ui", file, lineOf(text, m.index), m[1]),
       file: relative,
       line: lineOf(text, m.index),
       hook: m[1],
-      api: preview(extractProperty(snippet, "api") || "Default or indirect API route", 100),
+      api: apiValue,
       evidence: preview(snippet, 220),
+      agentId,
     });
   });
 
@@ -283,6 +402,7 @@ for (const file of files) {
       id: id("prompt", file, lineOf(text, m.index), `${m[1]}:${records.prompts.length + 1}`),
       file: relative,
       line: lineOf(text, m.index),
+      agentId: registerAgent(fileAgent, file, lineOf(text, m.index), "prompt"),
       kind: m[1],
       inline,
       valueType: inline ? "inline literal" : "reference",
@@ -298,6 +418,7 @@ for (const file of files) {
         "Prompt is inline and harder to audit, diff, reuse, or cover with evals.",
         prompt.preview,
         prompt.id,
+        prompt.agentId,
       );
     }
   });
@@ -307,6 +428,7 @@ for (const file of files) {
       id: id("prompt", file, lineOf(text, m.index), m[1]),
       file: relative,
       line: lineOf(text, m.index),
+      agentId: registerAgent(fileAgent, file, lineOf(text, m.index), "prompt"),
       kind: "constant",
       name: m[1],
       inline: false,
@@ -324,6 +446,7 @@ for (const file of files) {
       id: id("tool", file, line, name),
       file: relative,
       line,
+      agentId: registerAgent(fileAgent, file, line, "tool"),
       name,
       description: preview(extractProperty(snippet, "description") || "No description detected", 160),
       schema: schemaSummary(snippet),
@@ -342,6 +465,7 @@ for (const file of files) {
         `Tool ${name} appears to perform side effects and should have trace IDs, authorization checks, and tests.`,
         tool.evidence,
         tool.id,
+        tool.agentId,
       );
     }
   });
@@ -366,6 +490,7 @@ for (const file of files) {
       id: id("chain", file, line, m[1]),
       file: relative,
       line,
+      agentId: registerAgent(inferAgent(file, text, m.index, m[1]), file, line, "chain"),
       type: m[1],
       model: preview(model, 120),
       prompts: promptRefs,
@@ -377,10 +502,10 @@ for (const file of files) {
     records.modelCalls.push(chain);
     records.chains.push(chain);
     if (!chain.hasEval) {
-      pushRisk("missing-eval", "medium", file, line, `${m[1]} chain lacks nearby eval or test evidence.`, snippet, chain.id);
+      pushRisk("missing-eval", "medium", file, line, `${m[1]} chain lacks nearby eval or test evidence.`, snippet, chain.id, chain.agentId);
     }
     if (!chain.hasTrace) {
-      pushRisk("missing-trace", "high", file, line, `${m[1]} chain lacks trace ID, structured logging, or AI SDK telemetry evidence.`, snippet, chain.id);
+      pushRisk("missing-trace", "high", file, line, `${m[1]} chain lacks trace ID, structured logging, or AI SDK telemetry evidence.`, snippet, chain.id, chain.agentId);
     }
   });
 
@@ -391,6 +516,7 @@ for (const file of files) {
       id: id("chain", file, line, "ToolLoopAgent"),
       file: relative,
       line,
+      agentId: registerAgent(inferAgent(file, text, m.index, "ToolLoopAgent"), file, line, "chain"),
       type: "ToolLoopAgent",
       model: "Agent loop",
       prompts: [],
@@ -400,8 +526,8 @@ for (const file of files) {
       evidence: preview(snippet, 260),
     };
     records.chains.push(chain);
-    if (!chain.hasEval) pushRisk("missing-eval", "medium", file, line, "ToolLoopAgent chain lacks nearby eval or test evidence.", snippet, chain.id);
-    if (!chain.hasTrace) pushRisk("missing-trace", "high", file, line, "ToolLoopAgent chain lacks trace ID, structured logging, or telemetry evidence.", snippet, chain.id);
+    if (!chain.hasEval) pushRisk("missing-eval", "medium", file, line, "ToolLoopAgent chain lacks nearby eval or test evidence.", snippet, chain.id, chain.agentId);
+    if (!chain.hasTrace) pushRisk("missing-trace", "high", file, line, "ToolLoopAgent chain lacks trace ID, structured logging, or telemetry evidence.", snippet, chain.id, chain.agentId);
   });
 }
 
@@ -415,9 +541,125 @@ for (const route of records.routes) {
       `AI route ${route.file} exposes ${route.aiPatterns.join(", ")} without trace evidence.`,
       route.aiPatterns.join(", "),
       route.id,
+      route.agentId,
     );
   }
 }
+
+function computeAgents() {
+  const agents = [...agentMap.values()].map((agent) => {
+    const counts = {
+      prompts: records.prompts.filter((item) => item.agentId === agent.id).length,
+      tools: records.tools.filter((item) => item.agentId === agent.id).length,
+      chains: records.chains.filter((item) => item.agentId === agent.id).length,
+      routes: records.routes.filter((item) => item.agentId === agent.id).length,
+      uiEntrypoints: records.uiEntrypoints.filter((item) => item.agentId === agent.id).length,
+      risks: records.risks.filter((item) => item.agentId === agent.id).length,
+    };
+    return {
+      ...agent,
+      files: [...agent.files].sort(),
+      evidence: agent.evidence.slice(0, 12),
+      counts,
+      score: counts.chains * 5 + counts.routes * 4 + counts.uiEntrypoints * 3 + counts.tools * 2 + counts.prompts + counts.risks,
+    };
+  });
+  return agents
+    .filter((agent) => agent.score > 0)
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+}
+
+function readTtyLine(prompt) {
+  try {
+    const fd = fs.openSync("/dev/tty", "r+");
+    fs.writeSync(fd, prompt);
+    const chunks = [];
+    const buffer = Buffer.alloc(1);
+    while (fs.readSync(fd, buffer, 0, 1, null) === 1) {
+      const ch = buffer.toString("utf8");
+      if (ch === "\n" || ch === "\r") break;
+      chunks.push(ch);
+    }
+    fs.closeSync(fd);
+    return chunks.join("").trim();
+  } catch {
+    return "";
+  }
+}
+
+function chooseAgent(agents) {
+  if (listAgentsOnly) {
+    if (!agents.length) {
+      console.log("No agent candidates detected.");
+    } else {
+      console.log("Detected agents:");
+      agents.forEach((agent, index) => {
+        console.log(`${index + 1}. ${agent.name} (${agent.id}) - chains:${agent.counts.chains} routes:${agent.counts.routes} tools:${agent.counts.tools} prompts:${agent.counts.prompts} risks:${agent.counts.risks}`);
+      });
+    }
+    process.exit(0);
+  }
+
+  if (requestedAgent) {
+    const requested = slug(requestedAgent);
+    const found = agents.find((agent) => agent.id === requestedAgent || slug(agent.id) === requested || slug(agent.name) === requested);
+    if (!found) {
+      console.error(`Agent not found: ${requestedAgent}`);
+      if (agents.length) {
+        console.error("Available agents:");
+        agents.forEach((agent) => console.error(`- ${agent.name} (${agent.id})`));
+      }
+      process.exit(1);
+    }
+    return found;
+  }
+
+  if (agents.length > 1 && interactive) {
+    console.log("Multiple agent candidates detected:");
+    console.log("0. All agents");
+    agents.forEach((agent, index) => {
+      console.log(`${index + 1}. ${agent.name} (${agent.id}) - chains:${agent.counts.chains} routes:${agent.counts.routes} tools:${agent.counts.tools} prompts:${agent.counts.prompts} risks:${agent.counts.risks}`);
+    });
+    const answer = readTtyLine("Choose an agent to analyze [0]: ");
+    if (!answer || answer === "0") return null;
+    const index = Number(answer);
+    if (Number.isInteger(index) && index >= 1 && index <= agents.length) return agents[index - 1];
+    const requested = slug(answer);
+    const found = agents.find((agent) => agent.id === answer || slug(agent.id) === requested || slug(agent.name) === requested);
+    if (found) return found;
+    console.log("Selection not recognized. Scanning all agents.");
+  }
+
+  return null;
+}
+
+function applyAgentFilter(agent) {
+  records.agents = computeAgents();
+  const selectedAgent = agent || null;
+  if (!selectedAgent) return { selectedAgent: null, mode: records.agents.length > 1 ? "all-agents" : "single-or-none" };
+
+  const selectedId = selectedAgent.id;
+  const selectedChains = records.chains.filter((item) => item.agentId === selectedId);
+  const selectedRoutes = records.routes.filter((item) => item.agentId === selectedId);
+  const selectedUi = records.uiEntrypoints.filter((item) => item.agentId === selectedId);
+  const selectedFiles = new Set([...selectedChains, ...selectedRoutes, ...selectedUi].map((item) => item.file));
+  const selectedToolNames = new Set(selectedChains.flatMap((chain) => chain.tools || []));
+  const selectedTargetIds = new Set([...selectedChains, ...selectedRoutes, ...selectedUi].map((item) => item.id));
+
+  records.chains = selectedChains;
+  records.routes = selectedRoutes;
+  records.uiEntrypoints = selectedUi;
+  records.prompts = records.prompts.filter((item) => item.agentId === selectedId || selectedFiles.has(item.file));
+  records.tools = records.tools.filter((item) => item.agentId === selectedId || selectedFiles.has(item.file) || selectedToolNames.has(item.name));
+  for (const item of [...records.prompts, ...records.tools]) selectedTargetIds.add(item.id);
+  records.modelCalls = records.modelCalls.filter((item) => item.agentId === selectedId);
+  records.risks = records.risks.filter((item) => item.agentId === selectedId || selectedFiles.has(item.file) || selectedTargetIds.has(item.targetId));
+  records.agents = [selectedAgent];
+  return { selectedAgent, mode: "selected-agent" };
+}
+
+records.agents = computeAgents();
+const selection = applyAgentFilter(chooseAgent(records.agents));
 
 function rows(items, empty, render) {
   if (!items.length) return `- ${empty}\n`;
@@ -493,6 +735,8 @@ write(
 
 const report = `${header("Agent Observe Report")}## Summary
 
+- Agent selection: ${selection.selectedAgent ? `${selection.selectedAgent.name} (${selection.selectedAgent.id})` : "All detected agents"}
+- Agent candidates detected: ${records.agents.length}
 - Prompts detected: ${records.prompts.length}
 - Tools detected: ${records.tools.length}
 - Chains/model calls detected: ${records.chains.length}
@@ -500,6 +744,9 @@ const report = `${header("Agent Observe Report")}## Summary
 - UI entrypoints detected: ${records.uiEntrypoints.length}
 - Risks detected: ${records.risks.length}
 
+## Agent Candidates
+
+${rows(records.agents, "No agent candidates detected.", (agent) => `- ${agent.name} (${agent.id}) files: ${agent.files.join(", ") || "none"}.`)}
 ## Where are prompts defined?
 
 ${rows(records.prompts, "No prompt definitions detected.", (p) => `- \`${p.file}:${p.line}\` ${p.kind} (${p.valueType}): ${p.preview}`)}
@@ -537,7 +784,9 @@ write(
       generatedAt,
       root,
       scanner: "agent-observe-skill.sh",
+      selection,
       summary: {
+        agents: records.agents.length,
         prompts: records.prompts.length,
         tools: records.tools.length,
         chains: records.chains.length,
@@ -566,11 +815,29 @@ ROUTES="$OUT_DIR/routes.md"
 RISKS="$OUT_DIR/risks.md"
 TRACE="$OUT_DIR/trace-map.json"
 
+if [ "$LIST_AGENTS" = "1" ]; then
+  say "Detected agent candidates:"
+  find "$ROOT" \
+    \( -name .git -o -name node_modules -o -name .next -o -name dist -o -name build -o -name coverage -o -name .agent-observe-skill \) -prune \
+    -o \( -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" -o -name "*.mjs" -o -name "*.cjs" -o -name "*.mdx" \) -type f -print |
+  while IFS= read -r file; do
+    rel_file="${file#$ROOT/}"
+    if grep -Eq '\b(streamText|generateText|streamObject|generateObject|ToolLoopAgent|useChat|useCompletion|useAssistant)\b' "$file" ||
+      printf '%s\n' "$rel_file" | grep -Eq '^(app/api/.*/route|pages/api/).*\.[cm]?[jt]sx?$'; then
+      printf -- '- %s\n' "$rel_file"
+    fi
+  done
+  exit 0
+fi
+
 say "# Agent Observe Report" > "$REPORT"
 say "" >> "$REPORT"
 say "Generated locally from \`$ROOT\`." >> "$REPORT"
 say "" >> "$REPORT"
 say "Node was not available, so this Bash fallback used grep-based detection." >> "$REPORT"
+if [ -n "$AGENT_FILTER" ]; then
+  say "Agent filter requested: \`$AGENT_FILTER\`. Bash fallback applies this as a path/name substring filter." >> "$REPORT"
+fi
 say "" >> "$REPORT"
 
 say "# Prompts" > "$PROMPTS"
@@ -591,6 +858,9 @@ find "$ROOT" \
 while IFS= read -r file; do
   [ "$(cd "$(dirname "$file")" 2>/dev/null && pwd)/$(basename "$file")" = "$SELF_PATH" ] && continue
   rel_file="${file#$ROOT/}"
+  if [ -n "$AGENT_FILTER" ] && ! printf '%s\n' "$rel_file" | grep -Eiq "$(printf '%s' "$AGENT_FILTER" | sed 's/[][\.^$*+?{}|()]/\\&/g')"; then
+    continue
+  fi
 
   if printf '%s\n' "$rel_file" | grep -Eq '^(app/api/.*/route|pages/api/).*\.[cm]?[jt]sx?$'; then
     route_count=$((route_count + 1))

@@ -32,6 +32,20 @@ Or scan another repo:
 bash agent-observe-skill/scripts/skill.sh /path/to/repo
 ```
 
+If the repo contains more than one detected agent, the scanner asks which one to analyze when run in an interactive terminal. In automation, it scans all agents by default.
+
+List detected agents:
+
+```bash
+bash agent-observe-skill/scripts/skill.sh /path/to/repo --list-agents
+```
+
+Scan one agent:
+
+```bash
+bash agent-observe-skill/scripts/skill.sh /path/to/repo --agent checkout
+```
+
 The downloadable single-file version is here:
 
 ```text

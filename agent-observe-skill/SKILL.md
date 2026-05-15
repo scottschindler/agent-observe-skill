@@ -25,6 +25,20 @@ If running from outside the target repo, pass the repo path:
 bash /path/to/agent-observe-skill/scripts/skill.sh /path/to/repo
 ```
 
+If multiple agents are detected and the script is running in an interactive terminal, choose one from the prompt or choose all agents.
+
+For non-interactive use, list candidates first:
+
+```bash
+bash /path/to/agent-observe-skill/scripts/skill.sh /path/to/repo --list-agents
+```
+
+Then scan one candidate by id or name:
+
+```bash
+bash /path/to/agent-observe-skill/scripts/skill.sh /path/to/repo --agent checkout
+```
+
 After it runs, read `.agent-observe-skill/report.md` first, then inspect the focused files as needed.
 
 ## Output Files
