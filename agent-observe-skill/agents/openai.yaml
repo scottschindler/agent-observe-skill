@@ -2,3 +2,5 @@ interface:
   display_name: "Agent Observe Skill"
   short_description: "Map local agent prompts, tools, chains, routes, and risks"
   default_prompt: "Use $agent-observe-skill to scan this repo for prompts, tools, chains, routes, eval gaps, and trace risks."
+policy:
+  allow_implicit_invocation: true

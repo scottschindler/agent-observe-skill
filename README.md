@@ -4,6 +4,40 @@ Drop one file into your repo. See every prompt, tool, and chain.
 
 Agent Observe Skill is a local scanner for AI-agent codebases. It looks for Vercel AI SDK patterns first, then writes an observability report into the repo it scans. Your code never leaves your machine.
 
+## Use With Codex
+
+Codex can discover this skill directly from the repo through:
+
+```text
+.agents/skills/agent-observe-skill
+```
+
+That path is a symlink to the canonical skill folder:
+
+```text
+agent-observe-skill/
+├── SKILL.md
+├── agents/openai.yaml
+├── index.html
+└── scripts/skill.sh
+```
+
+When you open this repository in Codex CLI, the IDE extension, or the Codex app, invoke it explicitly:
+
+```text
+Use $agent-observe-skill to scan this repo for prompts, tools, chains, routes, eval gaps, and trace risks.
+```
+
+Codex can also invoke it implicitly when your request matches the skill description.
+
+To install it into your user-level Codex skills from GitHub, ask Codex:
+
+```text
+Use $skill-installer to install scottschindler/agent-observe-skill from path agent-observe-skill.
+```
+
+Restart Codex if the newly installed skill does not appear immediately.
+
 ## Install With skills.sh
 
 After this repo is published to GitHub, install it into your agent environment:
