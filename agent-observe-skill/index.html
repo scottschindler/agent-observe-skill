@@ -89,22 +89,23 @@
       main {
         width: min(1040px, calc(100vw - 32px));
         margin: 0 auto;
-        padding: 30px 0 44px;
+        padding: 22px 0 40px;
         display: grid;
-        gap: 22px;
+        gap: 18px;
       }
 
       .hero {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
-        gap: 24px;
-        align-items: end;
+        grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+        gap: 18px;
+        align-items: center;
       }
 
       h1 {
         margin: 0;
-        font-size: clamp(38px, 6vw, 72px);
-        line-height: 0.96;
+        max-width: 620px;
+        font-size: clamp(30px, 4.5vw, 52px);
+        line-height: 1;
         letter-spacing: 0;
       }
 
@@ -126,7 +127,8 @@
 
       .trust {
         border-left: 3px solid var(--green);
-        padding-left: 13px;
+        padding-left: 12px;
+        font-size: 14px;
       }
 
       section {
@@ -338,10 +340,10 @@
 
     <main>
       <div class="hero">
-        <h1>Drop one file into your repo. See every prompt, tool, and chain.</h1>
+        <h1>Map every agent prompt, tool, and chain.</h1>
         <p class="trust">
-          <strong>Your code never leaves your machine.</strong> The script scans local files and
-          writes Markdown plus JSON into <code>.agent-observe-skill/</code>.
+          <strong>Your code stays local.</strong> Generates a private observability report in
+          <code>.agent-observe-skill/</code>.
         </p>
       </div>
 
