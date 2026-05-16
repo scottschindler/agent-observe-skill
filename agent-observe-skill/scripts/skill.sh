@@ -138,6 +138,8 @@ function walk(dir, files = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (ignoreDirs.has(entry.name)) continue;
     const full = path.join(dir, entry.name);
+    const relative = rel(full);
+    if (relative === "app/agent-observe-skill" || relative.startsWith("app/agent-observe-skill/")) continue;
     if (entry.isDirectory()) {
       walk(full, files);
       continue;
@@ -342,6 +344,33 @@ function hasSideEffect(snippet) {
   return /\b(fetch|axios|request|prisma|db\.|sql`|insert|update|delete|upsert|create|writeFile|appendFile|unlink|rm\(|send|email|stripe|charge|refund|queue|publish|POST|PUT|PATCH|DELETE)\b/i.test(snippet);
 }
 
+const modelCallPatterns = [
+  {
+    label: "streamText",
+    regex: /\bstreamText\s*\(/g,
+  },
+  {
+    label: "generateText",
+    regex: /\bgenerateText\s*\(/g,
+  },
+  {
+    label: "streamObject",
+    regex: /\bstreamObject\s*\(/g,
+  },
+  {
+    label: "generateObject",
+    regex: /\bgenerateObject\s*\(/g,
+  },
+  {
+    label: "OpenAI chat.completions.create",
+    regex: /\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\.chat\.completions\.create\s*\(/g,
+  },
+  {
+    label: "OpenAI responses.create",
+    regex: /\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\.responses\.create\s*\(/g,
+  },
+];
+
 function schemaSummary(snippet) {
   const schema = extractProperty(snippet, "inputSchema") || extractProperty(snippet, "schema") || "";
   if (!schema) return "No inputSchema detected";
@@ -383,9 +412,11 @@ for (const file of files) {
     eachMatch(text, /\bexport\s+const\s+(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\b/g, (m) => methods.add(m[1]));
     if (isPagesRoute && methods.size === 0) methods.add("handler");
     const aiPatterns = [];
-    for (const pattern of ["streamText", "generateText", "streamObject", "generateObject", "ToolLoopAgent"]) {
-      if (text.includes(pattern)) aiPatterns.push(pattern);
+    for (const pattern of modelCallPatterns) {
+      pattern.regex.lastIndex = 0;
+      if (pattern.regex.test(text)) aiPatterns.push(pattern.label);
     }
+    if (/\bToolLoopAgent\b/.test(text)) aiPatterns.push("ToolLoopAgent");
     records.routes.push({
       id: id("route", file, 1),
       file: relative,
@@ -492,9 +523,9 @@ for (const file of files) {
     }
   });
 
-  eachMatch(text, /\b(streamText|generateText|streamObject|generateObject)\s*\(/g, (m) => {
-    const snippet = extractBalancedCall(text, m.index);
-    const line = lineOf(text, m.index);
+  function pushModelCall(match, type) {
+    const snippet = extractBalancedCall(text, match.index);
+    const line = lineOf(text, match.index);
     const model = extractProperty(snippet, "model") || "No model property detected";
     const promptRefs = [];
     for (const key of ["system", "prompt", "messages"]) {
@@ -509,11 +540,11 @@ for (const file of files) {
       });
     }
     const chain = {
-      id: id("chain", file, line, m[1]),
+      id: id("chain", file, line, slug(type)),
       file: relative,
       line,
-      agentId: registerAgent(inferAgent(file, text, m.index, m[1]), file, line, "chain"),
-      type: m[1],
+      agentId: registerAgent(inferAgent(file, text, match.index, type), file, line, "chain"),
+      type,
       model: preview(model, 120),
       prompts: promptRefs,
       tools: [...new Set(tools)],
@@ -524,12 +555,18 @@ for (const file of files) {
     records.modelCalls.push(chain);
     records.chains.push(chain);
     if (!chain.hasEval) {
-      pushRisk("missing-eval", "medium", file, line, `${m[1]} chain lacks nearby eval or test evidence.`, snippet, chain.id, chain.agentId);
+      pushRisk("missing-eval", "medium", file, line, `${type} chain lacks nearby eval or test evidence.`, snippet, chain.id, chain.agentId);
     }
     if (!chain.hasTrace) {
-      pushRisk("missing-trace", "high", file, line, `${m[1]} chain lacks trace ID, structured logging, or AI SDK telemetry evidence.`, snippet, chain.id, chain.agentId);
+      pushRisk("missing-trace", "high", file, line, `${type} chain lacks trace ID, structured logging, or AI telemetry evidence.`, snippet, chain.id, chain.agentId);
     }
-  });
+  }
+
+  for (const pattern of modelCallPatterns) {
+    eachMatch(text, pattern.regex, (m) => {
+      pushModelCall(m, pattern.label);
+    });
+  }
 
   eachMatch(text, /\bToolLoopAgent\b/g, (m) => {
     const line = lineOf(text, m.index);
@@ -1065,7 +1102,7 @@ write(
 write(
   "chains.md",
   header("Chains And Model Calls") +
-    rows(records.chains, "No streamText, generateText, streamObject, generateObject, or ToolLoopAgent usage detected.", (c) =>
+    rows(records.chains, "No Vercel AI SDK, OpenAI SDK, or ToolLoopAgent model calls detected.", (c) =>
       [
         `- \`${c.file}:${c.line}\` ${c.type}`,
         `  - Model: ${c.model}`,
@@ -1176,11 +1213,11 @@ INDEX="$OUT_DIR/index.html"
 if [ "$LIST_AGENTS" = "1" ]; then
   say "Detected agent candidates:"
   find "$ROOT" \
-    \( -name .git -o -name node_modules -o -name .next -o -name dist -o -name build -o -name coverage -o -name .agent-observe-skill \) -prune \
+    \( -name .git -o -name node_modules -o -name .next -o -name dist -o -name build -o -name coverage -o -name .agent-observe-skill -o -path "$ROOT/app/agent-observe-skill" \) -prune \
     -o \( -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" -o -name "*.mjs" -o -name "*.cjs" -o -name "*.mdx" \) -type f -print |
   while IFS= read -r file; do
     rel_file="${file#$ROOT/}"
-    if grep -Eq '\b(streamText|generateText|streamObject|generateObject|ToolLoopAgent|useChat|useCompletion|useAssistant)\b' "$file" ||
+    if grep -Eq '\b(streamText|generateText|streamObject|generateObject|ToolLoopAgent|useChat|useCompletion|useAssistant)\b|\.chat\.completions\.create\s*\(|\.responses\.create\s*\(' "$file" ||
       printf '%s\n' "$rel_file" | grep -Eq '^(app/api/.*/route|pages/api/).*\.[cm]?[jt]sx?$'; then
       printf -- '- %s\n' "$rel_file"
     fi
@@ -1211,7 +1248,7 @@ route_count=0
 risk_count=0
 
 find "$ROOT" \
-  \( -name .git -o -name node_modules -o -name .next -o -name dist -o -name build -o -name coverage -o -name .agent-observe-skill \) -prune \
+  \( -name .git -o -name node_modules -o -name .next -o -name dist -o -name build -o -name coverage -o -name .agent-observe-skill -o -path "$ROOT/app/agent-observe-skill" \) -prune \
   -o \( -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" -o -name "*.mjs" -o -name "*.cjs" -o -name "*.mdx" \) -type f -print |
 while IFS= read -r file; do
   [ "$(cd "$(dirname "$file")" 2>/dev/null && pwd)/$(basename "$file")" = "$SELF_PATH" ] && continue
@@ -1245,9 +1282,9 @@ while IFS= read -r file; do
     fi
   fi
 
-  if grep -Eq '\b(streamText|generateText|streamObject|generateObject|ToolLoopAgent)\b' "$file"; then
+  if grep -Eq '\b(streamText|generateText|streamObject|generateObject|ToolLoopAgent)\b|\.chat\.completions\.create\s*\(|\.responses\.create\s*\(' "$file"; then
     chain_count=$((chain_count + 1))
-    grep -nE '\b(streamText|generateText|streamObject|generateObject|ToolLoopAgent)\b' "$file" | head -20 |
+    grep -nE '\b(streamText|generateText|streamObject|generateObject|ToolLoopAgent)\b|\.chat\.completions\.create\s*\(|\.responses\.create\s*\(' "$file" | head -20 |
       sed "s#^#- \`$rel_file:#; s#:#\` #" >> "$CHAINS"
     if ! grep -Eqi '\b(eval|evaluate|test|expect|assert|judge|grade)\b' "$file"; then
       risk_count=$((risk_count + 1))
