@@ -1,0 +1,38 @@
+{
+  "name": "agent-observe-skill",
+  "version": "0.1.0",
+  "description": "Scan local AI agent codebases for prompts, tools, model calls, routes, entry points, eval gaps, and trace risks.",
+  "author": {
+    "name": "Scott Schindler",
+    "url": "https://github.com/scottschindler"
+  },
+  "homepage": "https://github.com/scottschindler/agent-observe-skill",
+  "repository": "https://github.com/scottschindler/agent-observe-skill",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "skills",
+    "agents",
+    "observability",
+    "ai-sdk"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Observe Skill",
+    "shortDescription": "Map prompts, tools, routes, model calls, and risks in local agent code.",
+    "longDescription": "Agent Observe Skill scans a local codebase and generates a private observability report for AI agent prompts, tool calls, model calls, entry points, API routes, eval gaps, trace gaps, and side-effect risks.",
+    "developerName": "Scott Schindler",
+    "category": "Productivity",
+    "capabilities": [
+      "Code analysis",
+      "Local reports"
+    ],
+    "websiteURL": "https://github.com/scottschindler/agent-observe-skill",
+    "defaultPrompt": [
+      "Scan this repo with agent-observe-skill.",
+      "Map prompts, tools, routes, and risks.",
+      "Find eval gaps and trace risks."
+    ],
+    "brandColor": "#2F80ED"
+  }
+}

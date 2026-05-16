@@ -1,0 +1,22 @@
+{
+  "name": "agent-observe-marketplace",
+  "interface": {
+    "displayName": "Agent Observe"
+  },
+  "plugins": [
+    {
+      "name": "agent-observe-skill",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/scottschindler/agent-observe-skill.git",
+        "path": "./plugins/agent-observe-skill",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

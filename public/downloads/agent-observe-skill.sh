@@ -858,8 +858,9 @@ function renderSimpleHtmlReport(trace, report) {
     </main>
     <script>
       const trace = ${json};
-      const state = { agentId: (trace.agents || [])[0]?.id || "", kind: "tools" };
+      const state = { agentId: (trace.agents || [])[0]?.id || "", kind: "entrypoints" };
       const kinds = [
+        ["entrypoints", "Entry points"],
         ["tools", "Tool calls"],
         ["prompts", "Prompts"],
         ["chains", "Model calls"],
@@ -870,24 +871,26 @@ function renderSimpleHtmlReport(trace, report) {
       const byAgent = (items) => (items || []).filter((item) => item.agentId === state.agentId);
       const currentAgent = () => (trace.agents || []).find((agent) => agent.id === state.agentId) || null;
       function rows(kind) {
+        if (kind === "entrypoints") return byAgent(trace.uiEntrypoints).map((entry) => ({ meta: "UI entry", title: entry.hook, code: entry.file + ":" + entry.line + " · API: " + entry.api }));
         if (kind === "tools") return byAgent(trace.tools).map((tool) => ({ meta: tool.sideEffect ? "side-effect tool" : "tool", title: tool.name, code: tool.schema + " · " + tool.file + ":" + tool.line }));
         if (kind === "prompts") return byAgent(trace.prompts).map((prompt) => ({ meta: prompt.kind, title: prompt.preview, code: prompt.file + ":" + prompt.line }));
         if (kind === "chains") return byAgent(trace.chains).map((chain) => ({ meta: chain.type, title: chain.model, code: chain.file + ":" + chain.line + " · tools: " + ((chain.tools || []).join(", ") || "none") }));
-        if (kind === "routes") return [...byAgent(trace.routes).map((route) => ({ meta: route.kind, title: route.file, code: "methods: " + ((route.methods || []).join(", ") || "unknown") + " · AI: " + ((route.aiPatterns || []).join(", ") || "none") })), ...byAgent(trace.uiEntrypoints).map((entry) => ({ meta: "UI entry", title: entry.hook, code: entry.file + ":" + entry.line + " · API: " + entry.api }))];
+        if (kind === "routes") return byAgent(trace.routes).map((route) => ({ meta: route.kind, title: route.file, code: "methods: " + ((route.methods || []).join(", ") || "unknown") + " · AI: " + ((route.aiPatterns || []).join(", ") || "none") }));
         return byAgent(trace.risks).map((risk) => ({ meta: risk.severity + " / " + risk.kind, title: risk.message, code: risk.file + ":" + risk.line }));
       }
       function count(kind) {
-        if (kind === "routes") return byAgent(trace.routes).length + byAgent(trace.uiEntrypoints).length;
+        if (kind === "entrypoints") return byAgent(trace.uiEntrypoints).length;
         return rows(kind).length;
       }
       function render() {
         const agent = currentAgent();
         const summary = [
           ["Agents", trace.summary?.agents || 0],
+          ["Entry points", trace.summary?.uiEntrypoints || 0],
           ["Prompts", trace.summary?.prompts || 0],
           ["Tool calls", trace.summary?.tools || 0],
           ["Model calls", trace.summary?.chains || 0],
-          ["Routes", (trace.summary?.routes || 0) + (trace.summary?.uiEntrypoints || 0)],
+          ["Routes", trace.summary?.routes || 0],
           ["Risks", trace.summary?.risks || 0],
         ];
         document.querySelector("#summary").innerHTML = summary.map(([label, value]) => '<div class="metric"><strong>' + escapeHtml(value) + '</strong><span>' + escapeHtml(label) + '</span></div>').join("");
@@ -929,7 +932,7 @@ import { useMemo, useState } from "react";
 const data = ${JSON.stringify(data, null, 2)} as any;
 
 const colors = { bg: "#f7f8f5", panel: "#fff", ink: "#171a16", muted: "#637063", line: "#d7ddd2", blue: "#2f80ed" };
-const kinds = [["tools", "Tool calls"], ["prompts", "Prompts"], ["chains", "Model calls"], ["routes", "Routes"], ["risks", "Risks"]] as const;
+const kinds = [["entrypoints", "Entry points"], ["tools", "Tool calls"], ["prompts", "Prompts"], ["chains", "Model calls"], ["routes", "Routes"], ["risks", "Risks"]] as const;
 
 function Metric({ label, value }: { label: string; value: number }) {
   return <div style={{ border: "1px solid " + colors.line, borderRadius: 7, padding: 14, background: "#fbfcf9", textAlign: "center" }}><strong style={{ display: "block", fontSize: 28 }}>{value}</strong><span style={{ color: colors.muted, fontSize: 12 }}>{label}</span></div>;
@@ -937,19 +940,20 @@ function Metric({ label, value }: { label: string; value: number }) {
 
 export default function AgentObserveSkillPage() {
   const [agentId, setAgentId] = useState<string>(data.agents[0]?.id || "");
-  const [kind, setKind] = useState<string>("tools");
+  const [kind, setKind] = useState<string>("entrypoints");
   const agent = data.agents.find((item: any) => item.id === agentId);
   const byAgent = (items: any[]) => (items || []).filter((item: any) => item.agentId === agentId);
   const rows = useMemo(() => {
+    if (kind === "entrypoints") return byAgent(data.uiEntrypoints).map((entry: any) => ({ meta: "UI entry", title: entry.hook, code: entry.file + ":" + entry.line + " · API: " + entry.api }));
     if (kind === "tools") return byAgent(data.tools).map((tool: any) => ({ meta: tool.sideEffect ? "side-effect tool" : "tool", title: tool.name, code: tool.schema + " · " + tool.file + ":" + tool.line }));
     if (kind === "prompts") return byAgent(data.prompts).map((prompt: any) => ({ meta: prompt.kind, title: prompt.preview, code: prompt.file + ":" + prompt.line }));
     if (kind === "chains") return byAgent(data.chains).map((chain: any) => ({ meta: chain.type, title: chain.model, code: chain.file + ":" + chain.line + " · tools: " + ((chain.tools || []).join(", ") || "none") }));
-    if (kind === "routes") return [...byAgent(data.routes).map((route: any) => ({ meta: route.kind, title: route.file, code: "methods: " + ((route.methods || []).join(", ") || "unknown") + " · AI: " + ((route.aiPatterns || []).join(", ") || "none") })), ...byAgent(data.uiEntrypoints).map((entry: any) => ({ meta: "UI entry", title: entry.hook, code: entry.file + ":" + entry.line + " · API: " + entry.api }))];
+    if (kind === "routes") return byAgent(data.routes).map((route: any) => ({ meta: route.kind, title: route.file, code: "methods: " + ((route.methods || []).join(", ") || "unknown") + " · AI: " + ((route.aiPatterns || []).join(", ") || "none") }));
     return byAgent(data.risks).map((risk: any) => ({ meta: risk.severity + " / " + risk.kind, title: risk.message, code: risk.file + ":" + risk.line }));
   }, [agentId, kind]);
-  const count = (item: string) => item === "routes" ? byAgent(data.routes).length + byAgent(data.uiEntrypoints).length : (item === "tools" ? byAgent(data.tools).length : item === "prompts" ? byAgent(data.prompts).length : item === "chains" ? byAgent(data.chains).length : byAgent(data.risks).length);
+  const count = (item: string) => item === "entrypoints" ? byAgent(data.uiEntrypoints).length : (item === "routes" ? byAgent(data.routes).length : item === "tools" ? byAgent(data.tools).length : item === "prompts" ? byAgent(data.prompts).length : item === "chains" ? byAgent(data.chains).length : byAgent(data.risks).length);
   const activeLabel = kinds.find(([item]) => item === kind)?.[1] || "Details";
-  const summary = [["Agents", data.summary.agents], ["Prompts", data.summary.prompts], ["Tool calls", data.summary.tools], ["Model calls", data.summary.chains], ["Routes", data.summary.routes + data.summary.uiEntrypoints], ["Risks", data.summary.risks]] as const;
+  const summary = [["Agents", data.summary.agents], ["Entry points", data.summary.uiEntrypoints], ["Prompts", data.summary.prompts], ["Tool calls", data.summary.tools], ["Model calls", data.summary.chains], ["Routes", data.summary.routes], ["Risks", data.summary.risks]] as const;
   return (
     <main style={{ minHeight: "100vh", background: colors.bg, color: colors.ink, padding: 28 }}>
       <div style={{ maxWidth: 1040, margin: "0 auto", display: "grid", gap: 22 }}>
