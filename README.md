@@ -4,7 +4,7 @@ Agent Observe Skill is a local scanner for AI-agent codebases. It looks for Verc
 
 ## UI Example
 
-![Agent Observe Skill UI example](agent-observe-skill/assets/ui-example.png)
+![Agent Observe Skill UI example](assets/ui-example.png)
 
 ## Install With Codex
 
@@ -60,6 +60,10 @@ The scanner creates a local output folder in the target repo:
 
 Start with `index.html` for the visual report or `report.md` for the Markdown summary. The visual report includes overall counts, agent selection, and per-agent detail views for entry points, tool calls, prompts, model calls, routes, and risks. Use `trace-map.json` for structured follow-up analysis or visualizations. These generated files are added to `.git/info/exclude` so they stay out of ordinary commits.
 
+## What Gets Installed
+
+The installed skill is limited to `SKILL.md`, `agents/openai.yaml`, and `scripts/skill.sh`. Demo files and README images stay outside the skill folder.
+
 ## What It Detects
 
 The scanner prioritizes Vercel AI SDK and agent patterns:
@@ -113,10 +117,10 @@ The scanner reads local files and writes local Markdown and JSON. It does not up
 The static product demo is available at:
 
 ```text
-/agent-observe-skill/
+demo/
 ```
 
-Its source is `agent-observe-skill/index.html`. It includes:
+Its source is `demo/index.html`. It includes:
 
 - A download button for `skill.sh`
 - Overall counts
@@ -124,4 +128,4 @@ Its source is `agent-observe-skill/index.html`. It includes:
 - Per-agent detail buttons for entry points, tool calls, prompts, model calls, routes, and risks
 - A focused detail panel
 
-To preview it locally, serve the repo with any static file server and open `/agent-observe-skill/`.
+To preview it locally, serve the repo with any static file server and open `demo/`.

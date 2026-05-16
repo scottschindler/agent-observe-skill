@@ -4,26 +4,268 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Agent Observe Skill</title>
-    <meta http-equiv="refresh" content="0; url=/agent-observe-skill/" />
+    <meta
+      name="description"
+      content="A local agent observability skill that maps prompts, tools, model calls, routes, eval gaps, and trace risks."
+    />
     <style>
+      :root {
+        color-scheme: light;
+        --ink: #171a16;
+        --muted: #5f6b5e;
+        --line: #d5ddcf;
+        --paper: #fbfcf8;
+        --wash: #eef2ea;
+        --blue: #2f80ed;
+        --green: #3d8b66;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
       body {
         margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        background: #f6f7f3;
-        color: #171a16;
+        background: var(--paper);
+        color: var(--ink);
         font-family:
           Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
           sans-serif;
       }
 
       a {
-        color: #2359a6;
+        color: inherit;
+      }
+
+      .shell {
+        width: min(1040px, calc(100vw - 32px));
+        margin: 0 auto;
+      }
+
+      header {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .nav {
+        min-height: 64px;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+      }
+
+      .brand strong {
+        font-size: 17px;
+      }
+
+      .brand span,
+      p {
+        color: var(--muted);
+      }
+
+      .button {
+        display: inline-flex;
+        min-height: 42px;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--ink);
+        border-radius: 7px;
+        padding: 0 16px;
+        background: var(--ink);
+        color: #fff;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      .button.secondary {
+        background: transparent;
+        color: var(--ink);
+      }
+
+      .hero-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 24px;
+      }
+
+      main {
+        padding: 50px 0 64px;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 36px;
+      }
+
+      h1 {
+        margin: 0;
+        max-width: 680px;
+        font-size: clamp(38px, 6vw, 74px);
+        line-height: 0.97;
+        letter-spacing: 0;
+      }
+
+      .lede {
+        max-width: 620px;
+        margin: 22px 0 0;
+        font-size: 19px;
+        line-height: 1.55;
+      }
+
+      .trust {
+        margin-top: 20px;
+        border-left: 3px solid var(--green);
+        padding-left: 13px;
+        font-size: 15px;
+        color: var(--muted);
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        padding: 22px;
+      }
+
+      .command {
+        margin: 14px 0 0;
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--paper);
+        padding: 13px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+        font-size: 14px;
+        white-space: nowrap;
+      }
+
+      .install-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 32px;
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 18px;
+        background: #fff;
+      }
+
+      h2,
+      h3 {
+        margin: 0;
+      }
+
+      h2 {
+        font-size: 20px;
+      }
+
+      h3 {
+        font-size: 16px;
+      }
+
+      .card p {
+        margin: 8px 0 0;
+        line-height: 1.5;
+      }
+
+      @media (max-width: 780px) {
+        .nav,
+        .brand {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .nav {
+          padding: 16px 0;
+        }
+
+        .install-grid,
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        main {
+          padding-top: 34px;
+        }
+
+        .button {
+          width: 100%;
+        }
       }
     </style>
   </head>
   <body>
-    <p>Opening <a href="/agent-observe-skill/">Agent Observe Skill</a>.</p>
+    <header>
+      <nav class="shell nav" aria-label="Primary">
+        <div class="brand">
+          <strong>Agent Observe Skill</strong>
+          <span>Local observability for agent code.</span>
+        </div>
+      </nav>
+    </header>
+
+    <main class="shell">
+      <section class="hero" aria-labelledby="hero-title">
+        <div>
+          <h1 id="hero-title">See every prompt, tool, and chain in your repo.</h1>
+          <p class="lede">
+            Agent Observe Skill scans local code for AI SDK calls, tool schemas, API routes,
+            client entry points, eval gaps, and trace risks.
+          </p>
+          <p class="trust">
+            <strong>Your code stays local.</strong> The scanner writes Markdown, JSON, and a simple
+            visual report into <code>.agent-observe-skill/</code>.
+          </p>
+          <div class="hero-actions">
+            <a class="button" href="demo/">View demo</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="install-grid" aria-label="Install instructions">
+        <aside class="panel">
+          <h2>Install with Codex</h2>
+          <p>Add the marketplace once, restart Codex, then install Agent Observe Skill.</p>
+          <div class="command">codex plugin marketplace add scottschindler/agent-observe-skill --sparse .agents/plugins</div>
+        </aside>
+
+        <aside class="panel">
+          <h2>Install with Claude Code</h2>
+          <p>Use the skills.sh CLI, then invoke the skill from Claude Code.</p>
+          <div class="command">npx skills add scottschindler/agent-observe-skill</div>
+        </aside>
+      </section>
+
+      <section class="grid" aria-label="What it detects">
+        <div class="card">
+          <h3>Prompts and model calls</h3>
+          <p>Find inline prompts, system messages, stream calls, generated objects, and chain steps.</p>
+        </div>
+        <div class="card">
+          <h3>Tools and routes</h3>
+          <p>Map tool schemas, execute handlers, side effects, API routes, and UI entry points.</p>
+        </div>
+        <div class="card">
+          <h3>Risks and gaps</h3>
+          <p>Flag chains without evals, trace IDs, structured logging, or durable telemetry.</p>
+        </div>
+      </section>
+    </main>
   </body>
 </html>
