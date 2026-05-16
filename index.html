@@ -134,22 +134,141 @@
         padding: 22px;
       }
 
-      .command {
-        margin: 14px 0 0;
-        overflow-x: auto;
+      .install-card {
+        display: flex;
+        min-height: 178px;
+        flex-direction: column;
+      }
+
+      .install-card > p:not(.next-step) {
+        min-height: 48px;
+      }
+
+      .next-step {
+        min-height: 0;
+        margin: 12px 0 0;
+        font-size: 14px;
+        line-height: 1.45;
+      }
+
+      .prompt-copy {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 0;
+        padding: 0;
+        background: transparent;
+        color: var(--ink);
+        cursor: pointer;
+        font: inherit;
+        font-weight: 700;
+        text-align: left;
+      }
+
+      .prompt-copy svg {
+        width: 14px;
+        height: 14px;
+        flex: 0 0 auto;
+      }
+
+      .prompt-copy .check-icon {
+        display: none;
+      }
+
+      .prompt-copy.is-copied .copy-icon {
+        display: none;
+      }
+
+      .prompt-copy.is-copied .check-icon {
+        display: block;
+      }
+
+      .prompt-copy:focus-visible {
+        border-radius: 4px;
+        outline: 3px solid rgba(47, 128, 237, 0.28);
+        outline-offset: 2px;
+      }
+
+      .copy-command {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        width: 100%;
+        margin: auto 0 0;
         border: 1px solid var(--line);
         border-radius: 7px;
         background: var(--paper);
-        padding: 13px;
+        padding: 11px 11px 11px 13px;
+        color: var(--ink);
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .copy-command code {
+        overflow: hidden;
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
         font-size: 14px;
+        text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      .copy-command span {
+        display: inline-grid;
+        width: 30px;
+        height: 30px;
+        place-items: center;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fff;
+      }
+
+      .copy-command svg {
+        width: 16px;
+        height: 16px;
+      }
+
+      .copy-command .check-icon {
+        display: none;
+      }
+
+      .copy-command.is-copied .copy-icon {
+        display: none;
+      }
+
+      .copy-command.is-copied .check-icon {
+        display: block;
+      }
+
+      .copy-command:focus-visible {
+        outline: 3px solid rgba(47, 128, 237, 0.28);
+        outline-offset: 2px;
+      }
+
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+      }
+
+      .command-fallback {
+        position: fixed;
+        left: -9999px;
+        top: 0;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
       }
 
       .install-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 14px;
+        margin-top: 36px;
       }
 
       .grid {
@@ -184,6 +303,26 @@
         line-height: 1.5;
       }
 
+      footer {
+        border-top: 1px solid var(--line);
+        padding: 22px 0;
+      }
+
+      footer p {
+        margin: 0;
+        font-size: 14px;
+      }
+
+      footer a {
+        color: var(--ink);
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      footer a:hover {
+        text-decoration: underline;
+      }
+
       @media (max-width: 780px) {
         .nav,
         .brand {
@@ -204,7 +343,8 @@
           padding-top: 34px;
         }
 
-        .button {
+        .button,
+        .copy-command {
           width: 100%;
         }
       }
@@ -239,16 +379,90 @@
       </section>
 
       <section class="install-grid" aria-label="Install instructions">
-        <aside class="panel">
+        <aside class="panel install-card">
           <h2>Install with Codex</h2>
           <p>Add the marketplace once, restart Codex, then install Agent Observe Skill.</p>
-          <div class="command">codex plugin marketplace add scottschindler/agent-observe-skill --sparse .agents/plugins</div>
+          <button
+            class="copy-command"
+            type="button"
+            data-copy="codex plugin marketplace add scottschindler/agent-observe-skill --sparse .agents/plugins"
+            data-label="Copy Codex install command"
+            aria-label="Copy Codex install command"
+          >
+            <code>codex plugin marketplace add scottschindler/agent-observe-skill --sparse .agents/plugins</code>
+            <span aria-hidden="true">
+              <svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 6 9 17l-5-5"></path>
+              </svg>
+            </span>
+            <span class="sr-only">Copy</span>
+          </button>
+          <p class="next-step">
+            After install, ask Codex:
+            <button
+              class="prompt-copy"
+              type="button"
+              data-copy="Use $agent-observe-skill to scan this repo."
+              data-label="Copy Codex prompt"
+              aria-label="Copy Codex prompt"
+            >
+              Use $agent-observe-skill to scan this repo.
+              <svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M20 6 9 17l-5-5"></path>
+              </svg>
+            </button>
+          </p>
         </aside>
 
-        <aside class="panel">
+        <aside class="panel install-card">
           <h2>Install with Claude Code</h2>
           <p>Use the skills.sh CLI, then invoke the skill from Claude Code.</p>
-          <div class="command">npx skills add scottschindler/agent-observe-skill</div>
+          <button
+            class="copy-command"
+            type="button"
+            data-copy="npx skills add scottschindler/agent-observe-skill"
+            data-label="Copy Claude Code install command"
+            aria-label="Copy Claude Code install command"
+          >
+            <code>npx skills add scottschindler/agent-observe-skill</code>
+            <span aria-hidden="true">
+              <svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 6 9 17l-5-5"></path>
+              </svg>
+            </span>
+            <span class="sr-only">Copy</span>
+          </button>
+          <p class="next-step">
+            After install, ask Claude Code:
+            <button
+              class="prompt-copy"
+              type="button"
+              data-copy="Use $agent-observe-skill to scan this repo."
+              data-label="Copy Claude Code prompt"
+              aria-label="Copy Claude Code prompt"
+            >
+              Use $agent-observe-skill to scan this repo.
+              <svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M20 6 9 17l-5-5"></path>
+              </svg>
+            </button>
+          </p>
         </aside>
       </section>
 
@@ -267,5 +481,43 @@
         </div>
       </section>
     </main>
+
+    <footer>
+      <div class="shell">
+        <p>Built by <a href="https://www.dashlabs.sh">Dashlabs</a>.</p>
+      </div>
+    </footer>
+    <textarea class="command-fallback" aria-hidden="true" tabindex="-1"></textarea>
+    <script>
+      const fallback = document.querySelector(".command-fallback");
+
+      async function copyText(value) {
+        try {
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(value);
+            return;
+          }
+        } catch (error) {
+          // Fall back to the hidden textarea path below.
+        }
+
+        fallback.value = value;
+        fallback.focus();
+        fallback.select();
+        document.execCommand("copy");
+      }
+
+      document.querySelectorAll("[data-copy]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          await copyText(button.dataset.copy);
+          button.classList.add("is-copied");
+          button.setAttribute("aria-label", "Copied");
+          window.setTimeout(() => {
+            button.classList.remove("is-copied");
+            button.setAttribute("aria-label", button.dataset.label);
+          }, 1400);
+        });
+      });
+    </script>
   </body>
 </html>

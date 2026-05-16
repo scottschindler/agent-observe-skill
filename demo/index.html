@@ -56,36 +56,6 @@
         font-size: 13px;
       }
 
-      .actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        justify-content: flex-end;
-      }
-
-      .download,
-      .install {
-        border: 1px solid #111811;
-        border-radius: 7px;
-        padding: 10px 13px;
-        text-decoration: none;
-        font-weight: 700;
-        font-size: 13px;
-        white-space: nowrap;
-      }
-
-      .download {
-        background: #111811;
-        color: #fff;
-      }
-
-      .install {
-        background: #fff;
-        color: #111811;
-        cursor: pointer;
-        font: inherit;
-      }
-
       main {
         width: min(1040px, calc(100vw - 32px));
         margin: 0 auto;
@@ -311,16 +281,6 @@
           flex-direction: column;
         }
 
-        .actions,
-        .download,
-        .install {
-          width: 100%;
-        }
-
-        .download,
-        .install {
-          text-align: center;
-        }
       }
     </style>
   </head>
@@ -329,12 +289,6 @@
       <div class="brand">
         <strong>Agent Observe Skill</strong>
         <span>Local scanner for prompts, tools, chains, routes, evals, and risks.</span>
-      </div>
-      <div class="actions">
-        <button class="install" type="button" id="copy-install">Copy Codex install</button>
-        <a class="download" href="../public/downloads/agent-observe-skill.sh" download="skill.sh">
-          Download skill.sh
-        </a>
       </div>
     </header>
 
@@ -376,8 +330,6 @@
     </main>
 
     <script>
-      const installCommand =
-        "codex plugin marketplace add scottschindler/agent-observe-skill --sparse .agents/plugins";
       const data = {
         summary: {
           agents: 2,
@@ -487,14 +439,6 @@
 
       render();
 
-      document.querySelector("#copy-install").addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(installCommand);
-          document.querySelector("#copy-install").textContent = "Copied";
-        } catch {
-          document.querySelector("#copy-install").textContent = "Copy failed";
-        }
-      });
     </script>
   </body>
 </html>
