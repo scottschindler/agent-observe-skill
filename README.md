@@ -1,6 +1,6 @@
 # Agent Observe Skill
 
-Agent Observe Skill is a local scanner for AI-agent codebases. It looks for Vercel AI SDK patterns first, then writes an observability report into the repo it scans. Your code never leaves your machine.
+Agent Observe Skill is a local scanner for AI-agent codebases. It looks for Vercel AI SDK, OpenAI SDK, and broader agent patterns, then writes an observability report into the repo it scans. Your code never leaves your machine.
 
 ## UI Example
 
@@ -66,12 +66,14 @@ The installed skill is limited to `SKILL.md`, `agents/openai.yaml`, and `scripts
 
 ## What It Detects
 
-The scanner prioritizes Vercel AI SDK and agent patterns:
+The scanner prioritizes Vercel AI SDK, OpenAI SDK, and agent patterns:
 
 - `streamText(...)`
 - `generateText(...)`
 - `streamObject(...)`
 - `generateObject(...)`
+- `openai.chat.completions.create(...)`
+- `openai.responses.create(...)`
 - `tool(...)`
 - `ToolLoopAgent`
 - `system`, `prompt`, and `messages`
