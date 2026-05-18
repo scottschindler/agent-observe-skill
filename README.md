@@ -6,7 +6,36 @@ Agent Observe Skill is a local scanner for AI-agent codebases. It looks for Verc
 
 ![Agent Observe Skill UI example](assets/ui-example.png)
 
-## Install With Codex
+## Add To A Codex Repo
+
+From the root of the repo you want to scan:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/scottschindler/agent-observe-skill/main/public/downloads/install-codex-skill.sh | bash
+```
+
+Restart Codex from that repo, then invoke:
+
+```text
+Use $agent-observe-skill to scan this repo for prompts, tools, model calls, entry points, routes, eval gaps, and trace risks.
+```
+
+If you prefer not to pipe into `bash`, download and run the installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/scottschindler/agent-observe-skill/main/public/downloads/install-codex-skill.sh -o install-agent-observe.sh
+bash install-agent-observe.sh
+rm install-agent-observe.sh
+```
+
+Commit the skill folder if you want everyone on the project to have it:
+
+```bash
+git add .agents/skills/agent-observe-skill
+git commit -m "Add agent observe Codex skill"
+```
+
+## Install As A Codex Plugin
 
 Add the Agent Observe plugin marketplace:
 
@@ -14,7 +43,7 @@ Add the Agent Observe plugin marketplace:
 codex plugin marketplace add scottschindler/agent-observe-skill --sparse .agents/plugins
 ```
 
-Then restart Codex, open the Plugin Directory, choose **Agent Observe**, and install **Agent Observe Skill**.
+This only adds the marketplace catalog. To make `$agent-observe-skill` appear in Codex, restart Codex, open the Plugin Directory, choose **Agent Observe**, and install **Agent Observe Skill**.
 
 After installing the plugin, invoke:
 
