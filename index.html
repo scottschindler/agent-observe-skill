@@ -213,6 +213,13 @@
         white-space: nowrap;
       }
 
+      .copy-command.multi code {
+        line-height: 1.5;
+        overflow: visible;
+        text-overflow: clip;
+        white-space: pre-wrap;
+      }
+
       .copy-command span {
         display: inline-grid;
         width: 30px;
@@ -266,7 +273,7 @@
 
       .install-grid {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 14px;
         margin-top: 36px;
       }
@@ -380,8 +387,33 @@
 
       <section class="install-grid" aria-label="Install instructions">
         <aside class="panel install-card">
-          <h2>Install with Codex</h2>
-          <p>Add the marketplace once, restart Codex, then install Agent Observe Skill.</p>
+          <h2>Add to this repo</h2>
+          <p>Install the skill into <code>.agents/skills</code>, restart Codex, then invoke it by name.</p>
+          <button
+            class="copy-command"
+            type="button"
+            data-copy="curl -fsSL https://raw.githubusercontent.com/scottschindler/agent-observe-skill/main/public/downloads/install-codex-skill.sh | bash"
+            data-label="Copy repo skill install commands"
+            aria-label="Copy repo skill install commands"
+          >
+            <code>curl -fsSL https://raw.githubusercontent.com/scottschindler/agent-observe-skill/main/public/downloads/install-codex-skill.sh | bash</code>
+            <span aria-hidden="true">
+              <svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 6 9 17l-5-5"></path>
+              </svg>
+            </span>
+            <span class="sr-only">Copy</span>
+          </button>
+          <p class="next-step">Then ask Codex: <strong>Use $agent-observe-skill to scan this repo.</strong></p>
+        </aside>
+
+        <aside class="panel install-card">
+          <h2>Install as Codex plugin</h2>
+          <p>Add the marketplace catalog, restart Codex, then install Agent Observe Skill from Plugin Directory.</p>
           <button
             class="copy-command"
             type="button"
@@ -469,7 +501,7 @@
       <section class="grid" aria-label="What it detects">
         <div class="card">
           <h3>Prompts and model calls</h3>
-          <p>Find inline prompts, system messages, stream calls, generated objects, and chain steps.</p>
+          <p>Find inline prompts, system messages, Vercel AI SDK calls, OpenAI SDK calls, and chain steps.</p>
         </div>
         <div class="card">
           <h3>Tools and routes</h3>

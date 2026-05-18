@@ -167,6 +167,14 @@ function preview(value, max = 140) {
   return text.length > max ? `${text.slice(0, max - 1)}...` : text;
 }
 
+function cleanMultiline(value, max = 3000) {
+  const text = String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/`/g, "'")
+    .trim();
+  return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+}
+
 function id(prefix, file, line, extra = "") {
   return `${prefix}:${rel(file)}:${line}${extra ? `:${extra}` : ""}`;
 }
@@ -304,7 +312,120 @@ function extractProperty(snippet, key) {
   }
   if (raw[0] === "{") return raw.slice(0, findMatching(raw, "{", "}") + 1);
   if (raw[0] === "[") return raw.slice(0, findMatching(raw, "[", "]") + 1);
+  const callExpression = extractCallExpression(raw);
+  if (callExpression) return callExpression;
   return (raw.match(/^[^,\n)]+/) || [""])[0].trim();
+}
+
+function extractCallExpression(raw) {
+  const trimmed = String(raw || "").trim();
+  if (!/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\s*\(/.test(trimmed)) return "";
+  const open = trimmed.indexOf("(");
+  let depth = 0;
+  let quote = "";
+  let escaped = false;
+  for (let i = open; i < trimmed.length; i += 1) {
+    const ch = trimmed[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(") depth += 1;
+    if (ch === ")") depth -= 1;
+    if (depth === 0) return trimmed.slice(0, i + 1);
+  }
+  return "";
+}
+
+function stripLiteral(value) {
+  const raw = String(value || "").trim();
+  const quote = raw[0];
+  if (!["`", '"', "'"].includes(quote)) return raw;
+  if (raw[raw.length - 1] !== quote) return raw.slice(1);
+  return raw.slice(1, -1);
+}
+
+function collectLiteralBindings(text) {
+  const bindings = new Map();
+  eachMatch(text, /(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')/g, (m) => {
+    bindings.set(m[1], cleanMultiline(stripLiteral(m[2])));
+  });
+  return bindings;
+}
+
+function collectPromptBuilders(text) {
+  const builders = new Map();
+  eachMatch(text, /\bfunction\s+([A-Za-z_$][\w$]*(?:Prompt|Instructions|Messages)[A-Za-z_$\w]*)\s*\([^)]*\)\s*\{/gi, (m) => {
+    const open = text.indexOf("{", m.index);
+    if (open === -1) return;
+    const body = text.slice(open, open + findMatching(text.slice(open), "{", "}") + 1);
+    const strings = [];
+    eachMatch(body, /(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')/g, (sm) => {
+      strings.push(cleanMultiline(stripLiteral(sm[1])));
+    });
+    if (/\bJSON\.stringify\b/.test(body)) strings.push("[dynamic context JSON]");
+    if (strings.length) builders.set(m[1], strings.join("\n\n"));
+  });
+  return builders;
+}
+
+function collectPromptBindings(text) {
+  const bindings = collectLiteralBindings(text);
+  const builders = collectPromptBuilders(text);
+  eachMatch(text, /(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*(?:Prompt|Instructions|Messages)[A-Za-z_$\w]*)\s*\(/gi, (m) => {
+    if (builders.has(m[2])) bindings.set(m[1], builders.get(m[2]));
+  });
+  return bindings;
+}
+
+function resolvePromptText(value, bindings) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^[`"']/.test(raw)) return cleanMultiline(stripLiteral(raw));
+  const contentRef = raw.match(/\bcontent\s*:\s*([A-Za-z_$][\w$]*)\b/);
+  if (contentRef && bindings.has(contentRef[1])) return bindings.get(contentRef[1]);
+  const directRef = raw.match(/^[A-Za-z_$][\w$]*$/);
+  if (directRef && bindings.has(directRef[0])) return bindings.get(directRef[0]);
+  return cleanMultiline(raw);
+}
+
+function pushPromptRecord({ file, relative, text, index, agent, kind, value, inline, valueType, name = "" }) {
+  const line = lineOf(text, index);
+  const literalBindings = collectPromptBindings(text);
+  const textValue = resolvePromptText(value, literalBindings);
+  const prompt = {
+    id: id("prompt", file, line, `${kind}:${records.prompts.length + 1}`),
+    file: relative,
+    line,
+    agentId: registerAgent(agent, file, line, "prompt"),
+    kind,
+    name,
+    inline,
+    valueType,
+    preview: preview(textValue || value, 180),
+    text: textValue,
+    evidence: preview(value, 240),
+  };
+  records.prompts.push(prompt);
+  if (inline) {
+    pushRisk(
+      "inline-prompt",
+      "medium",
+      file,
+      prompt.line,
+      "Prompt is inline and harder to audit, diff, reuse, or cover with evals.",
+      prompt.preview,
+      prompt.id,
+      prompt.agentId,
+    );
+  }
+  return prompt;
 }
 
 function findMatching(text, open, close) {
@@ -372,7 +493,7 @@ const modelCallPatterns = [
 ];
 
 function schemaSummary(snippet) {
-  const schema = extractProperty(snippet, "inputSchema") || extractProperty(snippet, "schema") || "";
+  const schema = extractProperty(snippet, "inputSchema") || extractProperty(snippet, "parameters") || extractProperty(snippet, "schema") || "";
   if (!schema) return "No inputSchema detected";
   const keys = new Set();
   eachMatch(schema, /\b([A-Za-z_$][\w$]*)\s*:\s*(?:z\.|Schema\.|Type\.|yup\.|v\.)/g, (m) => keys.add(m[1]));
@@ -395,12 +516,53 @@ function pushRisk(kind, severity, file, line, message, evidence, targetId = "", 
   return risk;
 }
 
+function plural(count, singular, pluralValue = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : pluralValue}`;
+}
+
+function describeAgent(agent, counts) {
+  const files = [...agent.files].sort();
+  const agentPrompts = records.prompts.filter((item) => item.agentId === agent.id);
+  const agentTools = records.tools.filter((item) => item.agentId === agent.id);
+  const agentChains = records.chains.filter((item) => item.agentId === agent.id);
+  const agentRoutes = records.routes.filter((item) => item.agentId === agent.id);
+  const agentUi = records.uiEntrypoints.filter((item) => item.agentId === agent.id);
+  const actions = [];
+  const routeLabels = agentRoutes.map((route) => {
+    const apiPath = route.file
+      .replace(/^app\/api\//, "/api/")
+      .replace(/^pages\/api\//, "/api/")
+      .replace(/\/route\.[cm]?[jt]sx?$/, "")
+      .replace(/\.[cm]?[jt]sx?$/, "");
+    const methods = route.methods.length ? route.methods.join("/") : "API";
+    return `${methods} ${apiPath}`;
+  });
+  if (routeLabels.length) actions.push(`exposes ${routeLabels.slice(0, 2).join(" and ")}`);
+  if (agentUi.length) actions.push(`has ${plural(agentUi.length, "client entry point")}`);
+  if (agentChains.length) {
+    const models = [...new Set(agentChains.map((chain) => chain.model).filter(Boolean))].slice(0, 2);
+    actions.push(`runs ${plural(agentChains.length, "model call")}${models.length ? ` (${models.join(", ")})` : ""}`);
+  }
+  if (agentTools.length) {
+    const names = agentTools.map((tool) => tool.name).filter(Boolean).slice(0, 3);
+    actions.push(`defines ${plural(agentTools.length, "tool")}${names.length ? ` (${names.join(", ")})` : ""}`);
+  }
+  if (agentPrompts.length) actions.push(`uses ${plural(agentPrompts.length, "prompt")}`);
+  const source = routeLabels.length ? routeLabels[0] : files[0] || agent.id;
+  const sourceText = routeLabels.length ? `route ${source}` : `file ${source}`;
+  if (!actions.length) {
+    return `Static scan inference: ${agent.name} is detected from ${sourceText}. Review the evidence below to confirm its runtime behavior.`;
+  }
+  return `Static scan inference: ${agent.name} is detected from ${sourceText}. It ${actions.join(", ")}.`;
+}
+
 const files = walk(root);
 
 for (const file of files) {
   const text = read(file);
   const relative = rel(file);
   const fileAgent = inferAgent(file, text, 0);
+  const promptBindings = collectPromptBindings(text);
 
   const isAppRoute = /^app\/api\/.*\/route\.[cm]?[jt]sx?$/.test(relative);
   const isPagesRoute = /^pages\/api\/.*\.[cm]?[jt]sx?$/.test(relative);
@@ -450,7 +612,10 @@ for (const file of files) {
 
   eachMatch(text, /\b(system|prompt|messages)\s*:\s*(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\[[\s\S]{0,700}?\]|[A-Za-z_$][\w$.[\]]*)/g, (m) => {
     const value = m[2] || "";
+    const lineTail = text.slice(m.index, text.indexOf("\n", m.index) === -1 ? text.length : text.indexOf("\n", m.index));
+    if (/^(string|number|boolean|unknown|any|Date)$/.test(value) && /;\s*$/.test(lineTail)) return;
     const inline = /^[`"']/.test(value) || (m[1] === "messages" && value.trim().startsWith("["));
+    const textValue = resolvePromptText(value, promptBindings);
     const prompt = {
       id: id("prompt", file, lineOf(text, m.index), `${m[1]}:${records.prompts.length + 1}`),
       file: relative,
@@ -459,7 +624,9 @@ for (const file of files) {
       kind: m[1],
       inline,
       valueType: inline ? "inline literal" : "reference",
-      preview: preview(value, 180),
+      preview: preview(textValue || value, 180),
+      text: textValue,
+      evidence: preview(value, 240),
     };
     records.prompts.push(prompt);
     if (inline) {
@@ -477,6 +644,7 @@ for (const file of files) {
   });
 
   eachMatch(text, /(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*(?:Prompt|System|Messages|Instruction|Instructions)[A-Za-z_$\w]*)\s*=\s*(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')/gi, (m) => {
+    const textValue = cleanMultiline(stripLiteral(m[2]));
     records.prompts.push({
       id: id("prompt", file, lineOf(text, m.index), m[1]),
       file: relative,
@@ -486,7 +654,26 @@ for (const file of files) {
       name: m[1],
       inline: false,
       valueType: "named constant",
-      preview: preview(m[2], 180),
+      preview: preview(textValue, 180),
+      text: textValue,
+      evidence: preview(m[2], 240),
+    });
+  });
+
+  eachMatch(text, /\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\.generate\s*\(/g, (m) => {
+    const snippet = extractBalancedCall(text, m.index);
+    const promptValue = extractProperty(snippet, "prompt") || (/\bprompt\s*,/.test(snippet) ? "prompt" : "");
+    if (!promptValue) return;
+    pushPromptRecord({
+      file,
+      relative,
+      text,
+      index: m.index,
+      agent: inferAgent(file, text, m.index, "generate"),
+      kind: "prompt",
+      value: promptValue,
+      inline: /^[`"']/.test(promptValue),
+      valueType: /^[`"']/.test(promptValue) ? "inline literal" : "reference",
     });
   });
 
@@ -506,7 +693,7 @@ for (const file of files) {
       hasInputSchema: /\binputSchema\s*:/.test(snippet),
       hasExecute: /\bexecute\s*:/.test(snippet),
       sideEffect,
-      evidence: preview(snippet, 240),
+      evidence: preview(snippet, 600),
     };
     records.tools.push(tool);
     if (sideEffect) {
@@ -620,6 +807,7 @@ function computeAgents() {
       files: [...agent.files].sort(),
       evidence: agent.evidence.slice(0, 12),
       counts,
+      description: describeAgent(agent, counts),
       score: counts.chains * 5 + counts.routes * 4 + counts.uiEntrypoints * 3 + counts.tools * 2 + counts.prompts + counts.risks,
     };
   });
@@ -846,7 +1034,8 @@ function renderSimpleHtmlReport(trace, report) {
       .agent-button { min-width: 150px; border: 2px solid #1f271d; border-radius: 8px; background: #fff; color: var(--ink); padding: 16px 18px; cursor: pointer; font: inherit; font-weight: 760; }
       .agent-button.active { border-color: var(--blue); color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); }
       .workspace { display: grid; grid-template-columns: minmax(260px, .95fr) minmax(300px, 1.05fr); gap: 28px; align-items: start; }
-      .agent-title { color: var(--blue); text-align: center; font-size: 30px; margin: 0 0 22px; }
+      .agent-title { color: var(--blue); text-align: center; font-size: 30px; margin: 0 0 10px; }
+      .agent-description { max-width: 620px; margin: 0 auto 22px; text-align: center; font-size: 14px; }
       .evidence-list { display: grid; gap: 12px; }
       .evidence-button { width: 100%; border: 2px solid #1f271d; border-radius: 7px; background: #fff; color: var(--ink); padding: 18px; text-align: center; cursor: pointer; font: inherit; font-weight: 760; }
       .evidence-button.active { border-color: var(--blue); color: var(--blue); }
@@ -857,7 +1046,7 @@ function renderSimpleHtmlReport(trace, report) {
       .row:first-child { border-top: 0; padding-top: 0; }
       .row span { display: block; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
       .row strong { display: block; margin-top: 5px; }
-      .row code { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+      .row code { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
       .empty { color: var(--muted); background: #f1f4ef; border-radius: 7px; padding: 12px; }
       @media (max-width: 860px) { header, .workspace { grid-template-columns: 1fr; display: grid; } .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .trust { max-width: none; } }
     </style>
@@ -885,6 +1074,7 @@ function renderSimpleHtmlReport(trace, report) {
       <section class="workspace">
         <div>
           <h2 class="agent-title" id="agent-title">Agent</h2>
+          <p class="agent-description" id="agent-description"></p>
           <div class="evidence-list" id="evidence-list"></div>
         </div>
         <div>
@@ -909,8 +1099,8 @@ function renderSimpleHtmlReport(trace, report) {
       const currentAgent = () => (trace.agents || []).find((agent) => agent.id === state.agentId) || null;
       function rows(kind) {
         if (kind === "entrypoints") return byAgent(trace.uiEntrypoints).map((entry) => ({ meta: "UI entry", title: entry.hook, code: entry.file + ":" + entry.line + " · API: " + entry.api }));
-        if (kind === "tools") return byAgent(trace.tools).map((tool) => ({ meta: tool.sideEffect ? "side-effect tool" : "tool", title: tool.name, code: tool.schema + " · " + tool.file + ":" + tool.line }));
-        if (kind === "prompts") return byAgent(trace.prompts).map((prompt) => ({ meta: prompt.kind, title: prompt.preview, code: prompt.file + ":" + prompt.line }));
+        if (kind === "tools") return byAgent(trace.tools).map((tool) => ({ meta: tool.sideEffect ? "side-effect tool" : "tool", title: tool.name, code: "Description: " + tool.description + "\\nSchema: " + tool.schema + "\\nExecute handler: " + (tool.hasExecute ? "yes" : "no") + "\\nSide effects: " + (tool.sideEffect ? "yes" : "no") + "\\nSource: " + tool.file + ":" + tool.line + "\\nEvidence: " + tool.evidence }));
+        if (kind === "prompts") return byAgent(trace.prompts).map((prompt) => ({ meta: prompt.kind, title: prompt.name || prompt.valueType || "Prompt", code: "Source: " + prompt.file + ":" + prompt.line + "\\nValue type: " + prompt.valueType + "\\nPrompt text:\\n" + (prompt.text || prompt.preview || "No prompt text resolved") }));
         if (kind === "chains") return byAgent(trace.chains).map((chain) => ({ meta: chain.type, title: chain.model, code: chain.file + ":" + chain.line + " · tools: " + ((chain.tools || []).join(", ") || "none") }));
         if (kind === "routes") return byAgent(trace.routes).map((route) => ({ meta: route.kind, title: route.file, code: "methods: " + ((route.methods || []).join(", ") || "unknown") + " · AI: " + ((route.aiPatterns || []).join(", ") || "none") }));
         return byAgent(trace.risks).map((risk) => ({ meta: risk.severity + " / " + risk.kind, title: risk.message, code: risk.file + ":" + risk.line }));
@@ -934,6 +1124,7 @@ function renderSimpleHtmlReport(trace, report) {
         document.querySelector("#agents").innerHTML = (trace.agents || []).map((item) => '<button type="button" class="agent-button ' + (item.id === state.agentId ? "active" : "") + '" data-agent="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + '</button>').join("") || '<p class="empty">No agent candidates detected.</p>';
         document.querySelectorAll("[data-agent]").forEach((button) => button.addEventListener("click", () => { state.agentId = button.dataset.agent; render(); }));
         document.querySelector("#agent-title").textContent = agent ? agent.name : "No agent selected";
+        document.querySelector("#agent-description").textContent = agent?.description || "Select an agent to see its inferred purpose from static evidence.";
         document.querySelector("#evidence-list").innerHTML = kinds.map(([kind, label]) => '<button type="button" class="evidence-button ' + (kind === state.kind ? "active" : "") + '" data-kind="' + kind + '">' + label + '<small>' + count(kind) + ' detected</small></button>').join("");
         document.querySelectorAll("[data-kind]").forEach((button) => button.addEventListener("click", () => { state.kind = button.dataset.kind; render(); }));
         const label = kinds.find(([kind]) => kind === state.kind)?.[1] || "Details";
@@ -982,8 +1173,8 @@ export default function AgentObserveSkillPage() {
   const byAgent = (items: any[]) => (items || []).filter((item: any) => item.agentId === agentId);
   const rows = useMemo(() => {
     if (kind === "entrypoints") return byAgent(data.uiEntrypoints).map((entry: any) => ({ meta: "UI entry", title: entry.hook, code: entry.file + ":" + entry.line + " · API: " + entry.api }));
-    if (kind === "tools") return byAgent(data.tools).map((tool: any) => ({ meta: tool.sideEffect ? "side-effect tool" : "tool", title: tool.name, code: tool.schema + " · " + tool.file + ":" + tool.line }));
-    if (kind === "prompts") return byAgent(data.prompts).map((prompt: any) => ({ meta: prompt.kind, title: prompt.preview, code: prompt.file + ":" + prompt.line }));
+    if (kind === "tools") return byAgent(data.tools).map((tool: any) => ({ meta: tool.sideEffect ? "side-effect tool" : "tool", title: tool.name, code: "Description: " + tool.description + "\\nSchema: " + tool.schema + "\\nExecute handler: " + (tool.hasExecute ? "yes" : "no") + "\\nSide effects: " + (tool.sideEffect ? "yes" : "no") + "\\nSource: " + tool.file + ":" + tool.line + "\\nEvidence: " + tool.evidence }));
+    if (kind === "prompts") return byAgent(data.prompts).map((prompt: any) => ({ meta: prompt.kind, title: prompt.name || prompt.valueType || "Prompt", code: "Source: " + prompt.file + ":" + prompt.line + "\\nValue type: " + prompt.valueType + "\\nPrompt text:\\n" + (prompt.text || prompt.preview || "No prompt text resolved") }));
     if (kind === "chains") return byAgent(data.chains).map((chain: any) => ({ meta: chain.type, title: chain.model, code: chain.file + ":" + chain.line + " · tools: " + ((chain.tools || []).join(", ") || "none") }));
     if (kind === "routes") return byAgent(data.routes).map((route: any) => ({ meta: route.kind, title: route.file, code: "methods: " + ((route.methods || []).join(", ") || "unknown") + " · AI: " + ((route.aiPatterns || []).join(", ") || "none") }));
     return byAgent(data.risks).map((risk: any) => ({ meta: risk.severity + " / " + risk.kind, title: risk.message, code: risk.file + ":" + risk.line }));
@@ -1007,8 +1198,8 @@ export default function AgentObserveSkillPage() {
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center" }}>{data.agents.map((item: any) => <button key={item.id} type="button" onClick={() => setAgentId(item.id)} style={{ minWidth: 150, border: "2px solid " + (item.id === agentId ? colors.blue : "#1f271d"), borderRadius: 8, background: "#fff", color: item.id === agentId ? colors.blue : colors.ink, padding: "16px 18px", cursor: "pointer", font: "inherit", fontWeight: 760 }}>{item.name}</button>)}</div>
         </section>
         <section style={{ border: "1px solid " + colors.line, borderRadius: 8, background: colors.panel, padding: 18, display: "grid", gridTemplateColumns: "minmax(260px, .95fr) minmax(300px, 1.05fr)", gap: 28 }}>
-          <div><h2 style={{ color: colors.blue, textAlign: "center", fontSize: 30, margin: "0 0 22px" }}>{agent?.name || "No agent selected"}</h2><div style={{ display: "grid", gap: 12 }}>{kinds.map(([item, label]) => <button key={item} type="button" onClick={() => setKind(item)} style={{ width: "100%", border: "2px solid " + (item === kind ? colors.blue : "#1f271d"), borderRadius: 7, background: "#fff", color: item === kind ? colors.blue : colors.ink, padding: 18, cursor: "pointer", font: "inherit", fontWeight: 760 }}>{label}<small style={{ display: "block", marginTop: 4, color: colors.muted, fontWeight: 500 }}>{count(item)} detected</small></button>)}</div></div>
-          <div><div style={{ textAlign: "center", marginBottom: 12, fontWeight: 760 }}>{activeLabel} info</div><div style={{ minHeight: 260, border: "2px solid " + colors.blue, borderRadius: 7, background: "#fff", padding: 18, display: "grid", gap: 12, alignContent: "start" }}>{rows.length ? rows.map((row: any, index: number) => <div key={index} style={{ borderTop: index ? "1px solid " + colors.line : 0, paddingTop: index ? 10 : 0 }}><span style={{ display: "block", color: colors.muted, fontSize: 11, letterSpacing: ".08em", textTransform: "uppercase" }}>{row.meta}</span><strong style={{ display: "block", marginTop: 5 }}>{row.title}</strong><code style={{ display: "block", marginTop: 6, color: colors.muted, fontSize: 12, overflowWrap: "anywhere" }}>{row.code}</code></div>) : <p style={{ color: colors.muted }}>No {activeLabel.toLowerCase()} detected for this agent.</p>}</div></div>
+          <div><h2 style={{ color: colors.blue, textAlign: "center", fontSize: 30, margin: "0 0 10px" }}>{agent?.name || "No agent selected"}</h2><p style={{ maxWidth: 620, margin: "0 auto 22px", color: colors.muted, textAlign: "center", fontSize: 14, lineHeight: 1.45 }}>{agent?.description || "Select an agent to see its inferred purpose from static evidence."}</p><div style={{ display: "grid", gap: 12 }}>{kinds.map(([item, label]) => <button key={item} type="button" onClick={() => setKind(item)} style={{ width: "100%", border: "2px solid " + (item === kind ? colors.blue : "#1f271d"), borderRadius: 7, background: "#fff", color: item === kind ? colors.blue : colors.ink, padding: 18, cursor: "pointer", font: "inherit", fontWeight: 760 }}>{label}<small style={{ display: "block", marginTop: 4, color: colors.muted, fontWeight: 500 }}>{count(item)} detected</small></button>)}</div></div>
+          <div><div style={{ textAlign: "center", marginBottom: 12, fontWeight: 760 }}>{activeLabel} info</div><div style={{ minHeight: 260, border: "2px solid " + colors.blue, borderRadius: 7, background: "#fff", padding: 18, display: "grid", gap: 12, alignContent: "start" }}>{rows.length ? rows.map((row: any, index: number) => <div key={index} style={{ borderTop: index ? "1px solid " + colors.line : 0, paddingTop: index ? 10 : 0 }}><span style={{ display: "block", color: colors.muted, fontSize: 11, letterSpacing: ".08em", textTransform: "uppercase" }}>{row.meta}</span><strong style={{ display: "block", marginTop: 5 }}>{row.title}</strong><code style={{ display: "block", marginTop: 6, color: colors.muted, fontSize: 12, overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{row.code}</code></div>) : <p style={{ color: colors.muted }}>No {activeLabel.toLowerCase()} detected for this agent.</p>}</div></div>
         </section>
       </div>
     </main>
@@ -1081,7 +1272,7 @@ write(
   "prompts.md",
   header("Prompts") +
     rows(records.prompts, "No system, prompt, messages, or named prompt constants detected.", (p) =>
-      `- \`${p.file}:${p.line}\` ${p.kind}${p.name ? ` \`${p.name}\`` : ""} (${p.valueType}): ${p.preview}`,
+      `- \`${p.file}:${p.line}\` ${p.kind}${p.name ? ` \`${p.name}\`` : ""} (${p.valueType})\n  - Text: ${p.text || p.preview}`,
     ),
 );
 
@@ -1150,10 +1341,10 @@ const report = `${header("Agent Observe Report")}## Summary
 
 ## Agent Candidates
 
-${rows(records.agents, "No agent candidates detected.", (agent) => `- ${agent.name} (${agent.id}) files: ${agent.files.join(", ") || "none"}.`)}
+${rows(records.agents, "No agent candidates detected.", (agent) => `- ${agent.name} (${agent.id}) files: ${agent.files.join(", ") || "none"}. ${agent.description}`)}
 ## Where are prompts defined?
 
-${rows(records.prompts, "No prompt definitions detected.", (p) => `- \`${p.file}:${p.line}\` ${p.kind} (${p.valueType}): ${p.preview}`)}
+${rows(records.prompts, "No prompt definitions detected.", (p) => `- \`${p.file}:${p.line}\` ${p.kind} (${p.valueType}): ${p.text || p.preview}`)}
 ## Which model calls use which prompts?
 
 ${rows(records.chains, "No model calls detected.", (c) => `- \`${c.file}:${c.line}\` ${c.type} uses ${c.prompts.length ? c.prompts.join("; ") : "no directly detected prompt property"}.`)}
