@@ -106,6 +106,7 @@ const ignoreDirs = new Set([
   ".turbo",
   ".vercel",
   ".agent-observe-skill",
+  "app/agent-observe-skill",
 ]);
 const scanExts = new Set([
   ".js",
@@ -175,6 +176,56 @@ function cleanMultiline(value, max = 3000) {
   return text.length > max ? `${text.slice(0, max - 1)}...` : text;
 }
 
+function capText(value, max = 8000) {
+  const text = String(value ?? "");
+  return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+}
+
+function snippetOf(text, line, ctx = 5) {
+  const lines = text.split(/\r?\n/);
+  const idx = Math.max(0, Math.min(lines.length - 1, line - 1));
+  const start = Math.max(0, idx - ctx);
+  const end = Math.min(lines.length, idx + ctx + 1);
+  return lines
+    .slice(start, end)
+    .map((content, i) => {
+      const n = start + i + 1;
+      const marker = n === line ? ">" : " ";
+      return `${marker} ${String(n).padStart(4, " ")} | ${content}`;
+    })
+    .join("\n");
+}
+
+function schemaFields(snippet) {
+  const schema = extractProperty(snippet, "inputSchema") || extractProperty(snippet, "schema") || "";
+  if (!schema) return [];
+  const fields = [];
+  const seen = new Set();
+  eachMatch(schema, /\b([A-Za-z_$][\w$]*)\s*:\s*((?:z\.|Schema\.|Type\.|yup\.|v\.)[A-Za-z0-9_.]+(?:\([^)]*\))?)/g, (m) => {
+    if (seen.has(m[1])) return;
+    seen.add(m[1]);
+    fields.push({ name: m[1], type: m[2] });
+  });
+  if (!fields.length) {
+    eachMatch(schema, /\b([A-Za-z_$][\w$]*)\s*:/g, (m) => {
+      if (seen.has(m[1]) || ["optional", "describe", "default", "strict", "refine"].includes(m[1])) return;
+      seen.add(m[1]);
+      fields.push({ name: m[1], type: "unknown" });
+    });
+  }
+  return fields.slice(0, 24);
+}
+
+function riskFixHint(kind) {
+  const hints = {
+    "inline-prompt": "Extract the prompt to a named constant or dedicated file, then add eval coverage.",
+    "side-effect-tool": "Add trace IDs, authorization checks, and integration tests for this tool's execute handler.",
+    "missing-eval": "Add promptfoo, vitest, or runtime evals near this chain.",
+    "missing-trace": "Add traceId, structured logging, or AI SDK experimental_telemetry.",
+    "route-without-trace": "Instrument this API route with trace metadata before model calls return.",
+  };
+  return hints[kind] || "Review this finding and add observability or tests.";
+}
 function id(prefix, file, line, extra = "") {
   return `${prefix}:${rel(file)}:${line}${extra ? `:${extra}` : ""}`;
 }
@@ -292,7 +343,7 @@ function inferAssignedName(text, index, fallback) {
 }
 
 function extractProperty(snippet, key) {
-  const pattern = new RegExp(`\\b${key}\\s*:\\s*([\\s\\S]{1,700})`);
+  const pattern = new RegExp(`(?:^|[^.\\w$])\\b${key}\\s*:\\s*([\\s\\S]{1,700})`);
   const match = snippet.match(pattern);
   if (!match) return "";
   const raw = match[1].trim();
@@ -381,7 +432,53 @@ function collectPromptBindings(text) {
   eachMatch(text, /(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*(?:Prompt|Instructions|Messages)[A-Za-z_$\w]*)\s*\(/gi, (m) => {
     if (builders.has(m[2])) bindings.set(m[1], builders.get(m[2]));
   });
+  eachMatch(text, /(?:export\s+)?(?:const|let|var)\s+(prompt|system|messages|[A-Za-z_$][\w$]*(?:Prompt|System|Messages|Instruction|Instructions)[A-Za-z_$\w]*)\s*=\s*([\s\S]{1,1200}?);/gi, (m) => {
+    if (bindings.has(m[1])) return;
+    const summary = summarizePromptReference(m[2]);
+    if (summary) bindings.set(m[1], summary);
+  });
   return bindings;
+}
+
+function normalizePromptReference(value) {
+  return clean(value)
+    .replace(/[!?]\./g, ".")
+    .replace(/\?\./g, ".")
+    .replace(/\[['"]([^'"]+)['"]\]/g, ".$1");
+}
+
+function promptReferences(value) {
+  const raw = String(value || "");
+  const refs = [];
+  const seen = new Set();
+  const push = (ref) => {
+    const normalized = normalizePromptReference(ref);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    refs.push(normalized);
+  };
+  eachMatch(raw, /\b[A-Za-z_$][\w$]*(?:[!?]?\.)+(?:prompt|system|messages|instructions|agentContext)\b/gi, (m) => {
+    push(m[0]);
+  });
+  if (!refs.length) {
+    eachMatch(raw, /\b[A-Za-z_$][\w$]*(?:Prompt|System|Messages|Instruction|Instructions)[A-Za-z_$\w]*\b/g, (m) => {
+      push(m[0]);
+    });
+  }
+  return refs;
+}
+
+function summarizePromptReference(value) {
+  const raw = String(value || "").trim();
+  if (!raw || /^[`"']/.test(raw)) return "";
+  const refs = promptReferences(raw);
+  if (refs.length) {
+    return `Prompt text is dynamic and was not statically resolved.\nReference: ${refs.join(", ")}`;
+  }
+  if (/^[A-Za-z_$][\w$]*(?:[.[\]]|\b)|\?/.test(raw)) {
+    return `Prompt text is dynamic and was not statically resolved.\nReference: ${cleanMultiline(raw)}`;
+  }
+  return "";
 }
 
 function resolvePromptText(value, bindings) {
@@ -392,6 +489,8 @@ function resolvePromptText(value, bindings) {
   if (contentRef && bindings.has(contentRef[1])) return bindings.get(contentRef[1]);
   const directRef = raw.match(/^[A-Za-z_$][\w$]*$/);
   if (directRef && bindings.has(directRef[0])) return bindings.get(directRef[0]);
+  const summary = summarizePromptReference(raw);
+  if (summary) return summary;
   return cleanMultiline(raw);
 }
 
@@ -509,6 +608,8 @@ function pushRisk(kind, severity, file, line, message, evidence, targetId = "", 
     line,
     message,
     evidence: preview(evidence, 220),
+    evidenceFull: capText(evidence, 1200),
+    fix: riskFixHint(kind),
     targetId,
     agentId,
   };
@@ -587,6 +688,7 @@ for (const file of files) {
       methods: [...methods],
       aiPatterns,
       hasTrace: hasTraceEvidence(text),
+      snippet: snippetOf(text, 1),
       agentId,
     });
   }
@@ -599,33 +701,38 @@ for (const file of files) {
       ? { id: `route:${slug(apiMatch[1])}`, name: titleCaseSlug(apiMatch[1]), source: "client-api" }
       : inferAgent(file, text, m.index, m[1]);
     const agentId = registerAgent(uiAgent, file, lineOf(text, m.index), "ui");
+    const uiLine = lineOf(text, m.index);
     records.uiEntrypoints.push({
-      id: id("ui", file, lineOf(text, m.index), m[1]),
+      id: id("ui", file, uiLine, m[1]),
       file: relative,
-      line: lineOf(text, m.index),
+      line: uiLine,
       hook: m[1],
       api: apiValue,
       evidence: preview(snippet, 220),
+      snippet: snippetOf(text, uiLine),
       agentId,
     });
   });
 
-  eachMatch(text, /\b(system|prompt|messages)\s*:\s*(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\[[\s\S]{0,700}?\]|[A-Za-z_$][\w$.[\]]*)/g, (m) => {
+  eachMatch(text, /(?:^|[^.\w$])\b(system|prompt|messages)\s*:\s*(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\[[\s\S]{0,700}?\]|[A-Za-z_$][\w$.[\]]*)/g, (m) => {
+    const key = m[1] || "";
     const value = m[2] || "";
     const lineTail = text.slice(m.index, text.indexOf("\n", m.index) === -1 ? text.length : text.indexOf("\n", m.index));
     if (/^(string|number|boolean|unknown|any|Date)$/.test(value) && /;\s*$/.test(lineTail)) return;
-    const inline = /^[`"']/.test(value) || (m[1] === "messages" && value.trim().startsWith("["));
+    const inline = /^[`"']/.test(value) || (key === "messages" && value.trim().startsWith("["));
+    const promptLine = lineOf(text, m.index);
     const textValue = resolvePromptText(value, promptBindings);
     const prompt = {
-      id: id("prompt", file, lineOf(text, m.index), `${m[1]}:${records.prompts.length + 1}`),
+      id: id("prompt", file, promptLine, `${key}:${records.prompts.length + 1}`),
       file: relative,
-      line: lineOf(text, m.index),
-      agentId: registerAgent(fileAgent, file, lineOf(text, m.index), "prompt"),
-      kind: m[1],
+      line: promptLine,
+      agentId: registerAgent(fileAgent, file, promptLine, "prompt"),
+      kind: key,
       inline,
       valueType: inline ? "inline literal" : "reference",
       preview: preview(textValue || value, 180),
-      text: textValue,
+      text: capText(textValue || value, 8000),
+      snippet: snippetOf(text, promptLine),
       evidence: preview(value, 240),
     };
     records.prompts.push(prompt);
@@ -644,18 +751,20 @@ for (const file of files) {
   });
 
   eachMatch(text, /(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*(?:Prompt|System|Messages|Instruction|Instructions)[A-Za-z_$\w]*)\s*=\s*(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')/gi, (m) => {
+    const constLine = lineOf(text, m.index);
     const textValue = cleanMultiline(stripLiteral(m[2]));
     records.prompts.push({
-      id: id("prompt", file, lineOf(text, m.index), m[1]),
+      id: id("prompt", file, constLine, m[1]),
       file: relative,
-      line: lineOf(text, m.index),
-      agentId: registerAgent(fileAgent, file, lineOf(text, m.index), "prompt"),
+      line: constLine,
+      agentId: registerAgent(fileAgent, file, constLine, "prompt"),
       kind: "constant",
       name: m[1],
       inline: false,
       valueType: "named constant",
       preview: preview(textValue, 180),
-      text: textValue,
+      text: capText(textValue, 8000),
+      snippet: snippetOf(text, constLine),
       evidence: preview(m[2], 240),
     });
   });
@@ -681,7 +790,8 @@ for (const file of files) {
     const snippet = extractBalancedCall(text, m.index);
     const line = lineOf(text, m.index);
     const name = inferAssignedName(text, m.index, `tool_${records.tools.length + 1}`);
-    const sideEffect = hasSideEffect(extractProperty(snippet, "execute") || snippet);
+    const sideEffect = hasSideEffect(snippet) || hasSideEffect(extractProperty(snippet, "execute"));
+    const fields = schemaFields(snippet);
     const tool = {
       id: id("tool", file, line, name),
       file: relative,
@@ -689,11 +799,14 @@ for (const file of files) {
       agentId: registerAgent(fileAgent, file, line, "tool"),
       name,
       description: preview(extractProperty(snippet, "description") || "No description detected", 160),
+      descriptionFull: capText(extractProperty(snippet, "description") || "", 2000),
       schema: schemaSummary(snippet),
+      schemaFields: fields,
       hasInputSchema: /\binputSchema\s*:/.test(snippet),
       hasExecute: /\bexecute\s*:/.test(snippet),
       sideEffect,
       evidence: preview(snippet, 600),
+      snippet: snippetOf(text, line),
     };
     records.tools.push(tool);
     if (sideEffect) {
@@ -715,14 +828,21 @@ for (const file of files) {
     const line = lineOf(text, match.index);
     const model = extractProperty(snippet, "model") || "No model property detected";
     const promptRefs = [];
+    const promptRefIds = [];
     for (const key of ["system", "prompt", "messages"]) {
       const value = extractProperty(snippet, key);
-      if (value) promptRefs.push(`${key}: ${preview(value, 90)}`);
+      if (value) {
+        promptRefs.push(`${key}: ${preview(value, 90)}`);
+        const match = records.prompts.find(
+          (p) => p.file === relative && p.kind === key && (p.text === capText(value, 8000) || p.preview === preview(value, 180)),
+        );
+        if (match) promptRefIds.push(match.id);
+      }
     }
     const toolBlock = extractProperty(snippet, "tools");
     const tools = [];
     if (toolBlock) {
-      eachMatch(toolBlock, /\b([A-Za-z_$][\w$]*)\s*[:,]/g, (tm) => {
+      eachMatch(toolBlock, /\b([A-Za-z_$][\w$]*)\s*(?=[,:}])/g, (tm) => {
         if (!["description", "parameters", "inputSchema", "execute"].includes(tm[1])) tools.push(tm[1]);
       });
     }
@@ -733,11 +853,15 @@ for (const file of files) {
       agentId: registerAgent(inferAgent(file, text, match.index, type), file, line, "chain"),
       type,
       model: preview(model, 120),
+      modelFull: capText(model, 500),
       prompts: promptRefs,
+      promptIds: promptRefIds,
       tools: [...new Set(tools)],
+      toolIds: [],
       hasEval: hasEvalEvidence(text, file),
       hasTrace: hasTraceEvidence(snippet) || hasTraceEvidence(text),
       evidence: preview(snippet, 260),
+      snippet: snippetOf(text, line),
     };
     records.modelCalls.push(chain);
     records.chains.push(chain);
@@ -758,6 +882,7 @@ for (const file of files) {
   eachMatch(text, /\bToolLoopAgent\b/g, (m) => {
     const line = lineOf(text, m.index);
     const snippet = text.slice(Math.max(0, m.index - 220), Math.min(text.length, m.index + 700));
+    const loopTools = records.tools.filter((tool) => tool.file === relative);
     const chain = {
       id: id("chain", file, line, "ToolLoopAgent"),
       file: relative,
@@ -765,11 +890,15 @@ for (const file of files) {
       agentId: registerAgent(inferAgent(file, text, m.index, "ToolLoopAgent"), file, line, "chain"),
       type: "ToolLoopAgent",
       model: "Agent loop",
+      modelFull: "Agent loop",
       prompts: [],
-      tools: records.tools.filter((tool) => tool.file === relative).map((tool) => tool.name),
+      promptIds: [],
+      tools: loopTools.map((tool) => tool.name),
+      toolIds: loopTools.map((tool) => tool.id),
       hasEval: hasEvalEvidence(text, file),
       hasTrace: hasTraceEvidence(text),
       evidence: preview(snippet, 260),
+      snippet: snippetOf(text, line),
     };
     records.chains.push(chain);
     if (!chain.hasEval) pushRisk("missing-eval", "medium", file, line, "ToolLoopAgent chain lacks nearby eval or test evidence.", snippet, chain.id, chain.agentId);
@@ -790,6 +919,226 @@ for (const route of records.routes) {
       route.agentId,
     );
   }
+}
+
+function postProcessCrossLinks() {
+  const toolIndex = new Map();
+  for (const tool of records.tools) {
+    toolIndex.set(`${tool.file}::${tool.name}`, tool.id);
+    toolIndex.set(`${tool.agentId}::${tool.name}`, tool.id);
+  }
+  for (const chain of records.chains) {
+    if (!chain.toolIds || !chain.toolIds.filter(Boolean).length) {
+      chain.toolIds = (chain.tools || []).map(
+        (name) => toolIndex.get(`${chain.file}::${name}`) || toolIndex.get(`${chain.agentId}::${name}`) || "",
+      );
+    }
+    if (!chain.promptIds) chain.promptIds = [];
+  }
+}
+
+postProcessCrossLinks();
+
+function inferChainOutput(chain) {
+  const snippet = `${chain.snippet || ""} ${chain.evidence || ""}`;
+  if (/toDataStreamResponse|toTextStreamResponse|toUIMessageStreamResponse/.test(snippet)) {
+    return "Streamed tokens to the client (data stream)";
+  }
+  if (/toAIStreamResponse/.test(snippet)) {
+    return "Streamed AI response to the client";
+  }
+  if (/NextResponse\.json|Response\.json|return\s+result\b/.test(snippet)) {
+    return "JSON or structured HTTP response";
+  }
+  if (chain.type === "streamText" || chain.type === "streamObject") {
+    return `Streamed model output (${chain.type})`;
+  }
+  if (chain.type === "generateText" || chain.type === "generateObject") {
+    return `Generated ${chain.type === "generateObject" ? "object" : "text"} returned to caller`;
+  }
+  return "Response returned to caller";
+}
+
+function matchRouteForEntry(entry, routes) {
+  const api = clean((entry.api || "").replace(/['"]/g, ""));
+  if (!api) return routes[0] || null;
+  return (
+    routes.find((route) => {
+      const routePath = route.file
+        .replace(/^app\/api\//, "/api/")
+        .replace(/\/route\.[cm]?[jt]sx?$/, "");
+      return api.includes(routePath) || route.file.includes(api.replace(/^\//, ""));
+    }) || routes[0] || null
+  );
+}
+
+function promptStepTitle(prompt) {
+  const kind = prompt.kind === "system" ? "System instructions are added" : prompt.kind === "messages" ? "Conversation context is added" : "User instructions are added";
+  const name = clean(prompt.name || "");
+  if (name && name.toLowerCase() !== clean(prompt.kind).toLowerCase()) return `${kind} · ${name}`;
+  if (prompt.valueType === "reference") return `${kind} from a shared reference`;
+  if (prompt.valueType === "named constant") return `${kind} from a named prompt`;
+  return kind;
+}
+
+function buildAgentFlow(agentId) {
+  const steps = [];
+  const push = (step) => {
+    steps.push({ ...step, order: steps.length + 1 });
+  };
+
+  const entries = records.uiEntrypoints
+    .filter((item) => item.agentId === agentId)
+    .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+  const routes = records.routes.filter((item) => item.agentId === agentId);
+  const prompts = records.prompts
+    .filter((item) => item.agentId === agentId)
+    .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+  const chains = records.chains
+    .filter((item) => item.agentId === agentId)
+    .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+  const tools = records.tools
+    .filter((item) => item.agentId === agentId)
+    .sort((a, b) => a.line - b.line);
+
+  if (entries.length) {
+    for (const entry of entries) {
+      push({
+        phase: "entry",
+        kind: "entrypoints",
+        id: entry.id,
+        title: "User sends a chat message",
+        subtitle: `${entry.hook} · ${entry.file}:${entry.line} -> ${entry.api}`,
+        note: "This is where a person starts the AI flow in the product.",
+      });
+    }
+  }
+
+  const primaryEntry = entries[0];
+  const matchedRoute = primaryEntry ? matchRouteForEntry(primaryEntry, routes) : routes[0];
+  if (matchedRoute) {
+    push({
+      phase: "route",
+      kind: "routes",
+      id: matchedRoute.id,
+      title: "App sends the message to the backend",
+      subtitle: `${(matchedRoute.methods || []).join("/") || "handler"} · ${matchedRoute.file}`,
+      note: "The app hands the user's message to server-side code before the AI runs.",
+    });
+  } else if (routes.length && !entries.length) {
+    for (const route of routes) {
+      push({
+        phase: "route",
+        kind: "routes",
+        id: route.id,
+        title: "Backend endpoint starts the AI flow",
+        subtitle: `${route.file} · AI: ${(route.aiPatterns || []).join(", ") || "none"}`,
+        note: "No UI entry point was detected, so this flow starts from a backend endpoint.",
+      });
+    }
+  }
+
+  const pushedPromptIds = new Set();
+
+  for (const chain of chains) {
+    const chainPrompts = (chain.promptIds || [])
+      .map((promptId) => prompts.find((item) => item.id === promptId))
+      .filter(Boolean)
+      .sort((a, b) => a.line - b.line);
+    for (const prompt of chainPrompts) {
+      if (pushedPromptIds.has(prompt.id)) continue;
+      pushedPromptIds.add(prompt.id);
+      push({
+        phase: "prompt",
+        kind: "prompts",
+        id: prompt.id,
+        title: promptStepTitle(prompt),
+        subtitle: preview(prompt.text || prompt.preview, 100),
+        note: "These instructions shape how the AI should behave before it answers.",
+      });
+    }
+    for (const prompt of prompts.filter(
+      (item) => item.file === chain.file && item.line <= chain.line + 12 && !pushedPromptIds.has(item.id),
+    )) {
+      pushedPromptIds.add(prompt.id);
+      push({
+        phase: "prompt",
+        kind: "prompts",
+        id: prompt.id,
+        title: promptStepTitle(prompt),
+        subtitle: preview(prompt.text || prompt.preview, 100),
+        note: "These instructions shape how the AI should behave before it answers.",
+      });
+    }
+
+    push({
+      phase: "model",
+      kind: "chains",
+      id: chain.id,
+      title: "AI generates a response",
+      subtitle: `${chain.type} · ${chain.model} · ${chain.file}:${chain.line}`,
+      note: "The model reads the message, instructions, and available tools, then produces the next response.",
+    });
+
+    const chainTools = (chain.toolIds || [])
+      .map((toolId) => tools.find((tool) => tool.id === toolId))
+      .filter(Boolean);
+    const readTools = chainTools.filter((tool) => !tool.sideEffect);
+    const effectTools = chainTools.filter((tool) => tool.sideEffect);
+
+    for (const tool of readTools) {
+      push({
+        phase: "tool",
+        kind: "tools",
+        id: tool.id,
+        title: "AI can look up information",
+        subtitle: `${tool.name} · ${tool.schema || "read / lookup"}`,
+        note: "The AI can call this helper to fetch information before answering.",
+        nested: true,
+      });
+    }
+    for (const tool of effectTools) {
+      push({
+        phase: "side-effect",
+        kind: "tools",
+        id: tool.id,
+        title: "AI can change something outside the chat",
+        subtitle: `${tool.name} · ${tool.file}:${tool.line}`,
+        note: "This helper can change external state, so it needs extra review, permissions, and logging.",
+        nested: true,
+      });
+    }
+
+    push({
+      phase: "output",
+      kind: "chains",
+      id: `${chain.id}:output`,
+      title: "User receives the answer",
+      subtitle: inferChainOutput(chain),
+      note: "The result is sent back to the product experience for the user to see.",
+    });
+  }
+
+  if (!steps.length) {
+    push({
+      phase: "empty",
+      kind: "",
+      id: "",
+      title: "No flow detected",
+      subtitle: "Run the scanner on a repo with AI SDK routes or client hooks.",
+      note: "",
+    });
+  }
+
+  return steps;
+}
+
+function buildAllFlows() {
+  const flows = {};
+  for (const agent of records.agents) {
+    flows[agent.id] = buildAgentFlow(agent.id);
+  }
+  return flows;
 }
 
 function computeAgents() {
@@ -957,9 +1306,29 @@ function rows(items, empty, render) {
   return items.map(render).join("\n") + "\n";
 }
 
+const legacyOutputFiles = [
+  "index.html",
+  "report.md",
+  "prompts.md",
+  "tools.md",
+  "chains.md",
+  "routes.md",
+  "risks.md",
+  "trace-map.json",
+];
+
+function removeLegacyOutputs() {
+  for (const name of legacyOutputFiles) {
+    fs.rmSync(path.join(outDir, name), { force: true });
+  }
+}
+
 function write(name, body) {
+  if (legacyOutputFiles.includes(name) || name.endsWith(".md")) return;
   fs.writeFileSync(path.join(outDir, name), body);
 }
+
+removeLegacyOutputs();
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -1002,137 +1371,92 @@ function tracePayload(generatedAt) {
       uiEntrypoints: records.uiEntrypoints.length,
       risks: records.risks.length,
     },
+    flows: buildAllFlows(),
+    flowNote:
+      "This is the likely product journey from user action to AI response. It is inferred from static code, so runtime tool order may differ.",
     ...records,
   };
 }
 
 function renderSimpleHtmlReport(trace, report) {
   const json = JSON.stringify({ ...trace, markdownReport: report }).replace(/</g, "\\u003c");
+  const selectionLabel = escapeHtml(trace.selection.label || "All detected agents");
+  const generatedAt = escapeHtml(trace.generatedAt);
+  const clientScript = "// Embedded into renderSimpleHtmlReport — client-side only (no Node).\nconst PHASE_META = {\n  entry: { label: \"Start\", tone: \"info\" },\n  route: { label: \"Backend\", tone: \"info\" },\n  prompt: { label: \"Instructions\", tone: \"low\" },\n  model: { label: \"AI response\", tone: \"info\" },\n  tool: { label: \"Lookup\", tone: \"ok\" },\n  \"side-effect\": { label: \"Action\", tone: \"high\" },\n  output: { label: \"Answer\", tone: \"ok\" },\n  empty: { label: \"—\", tone: \"low\" },\n};\n\nconst state = {\n  agentId: (trace.agents || [])[0]?.id || \"\",\n  selectedId: \"\",\n  kind: \"\",\n  view: \"report\",\n};\n\nconst escapeHtml = (value) =>\n  String(value ?? \"\").replace(/[&<>\"']/g, (char) =>\n    ({ \"&\": \"&amp;\", \"<\": \"&lt;\", \">\": \"&gt;\", '\"': \"&quot;\", \"'\": \"&#39;\" })[char],\n  );\n\nconst byAgent = (items) => (items || []).filter((item) => item.agentId === state.agentId);\nconst currentAgent = () => (trace.agents || []).find((agent) => agent.id === state.agentId) || null;\n\nfunction promptTitle(item, fallback) {\n  if (!item) return fallback || \"Prompt\";\n  const kind = item.kind === \"system\" ? \"System instructions are added\" : item.kind === \"messages\" ? \"Conversation context is added\" : \"User instructions are added\";\n  const name = String(item.name || \"\").trim();\n  if (name && name.toLowerCase() !== String(item.kind || \"\").toLowerCase()) return kind + \" · \" + name;\n  if (item.valueType === \"reference\") return kind + \" from a shared reference\";\n  if (item.valueType === \"named constant\") return kind + \" from a named prompt\";\n  return kind;\n}\n\nfunction displayStepTitle(step) {\n  if (!step) return \"\";\n  return step.title || \"\";\n}\n\nfunction agentButtonClass(active) {\n  return [\n    \"rounded-lg border px-3 py-1.5 text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-gray-200 whitespace-nowrap\",\n    active\n      ? \"border-blue-600 text-blue-600 bg-blue-50\"\n      : \"border-gray-200 text-gray-700 bg-white hover:border-gray-300 hover:bg-gray-50\",\n  ].join(\" \");\n}\n\nfunction viewButtonClass(active) {\n  return [\n    \"rounded-md px-3 py-1.5 text-xs font-semibold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200\",\n    active ? \"bg-white text-blue-700 shadow-sm\" : \"text-gray-500 hover:text-gray-900\",\n  ].join(\" \");\n}\n\nfunction badge(text, tone) {\n  const tones = {\n    high: \"bg-red-50 text-red-700 border-red-200\",\n    medium: \"bg-amber-50 text-amber-800 border-amber-200\",\n    low: \"bg-gray-50 text-gray-600 border-gray-200\",\n    info: \"bg-blue-50 text-blue-700 border-blue-200\",\n    ok: \"bg-emerald-50 text-emerald-700 border-emerald-200\",\n  };\n  return (\n    '<span class=\"inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ' +\n    (tones[tone] || tones.low) +\n    '\">' +\n    escapeHtml(text) +\n    \"</span>\"\n  );\n}\n\nfunction flowStepsForAgent(agentId) {\n  if (trace.flows && trace.flows[agentId]) return trace.flows[agentId];\n  return [];\n}\n\nfunction findItem(kind, id) {\n  if (!kind || !id || id.endsWith(\":output\")) return null;\n  const key =\n    kind === \"entrypoints\"\n      ? \"uiEntrypoints\"\n      : kind === \"chains\"\n        ? \"chains\"\n        : kind === \"routes\"\n          ? \"routes\"\n          : kind === \"tools\"\n            ? \"tools\"\n            : kind === \"prompts\"\n              ? \"prompts\"\n              : kind;\n  return (trace[key] || []).find((item) => item.id === id) || null;\n}\n\nfunction phaseAccent(phase) {\n  const map = {\n    entry: \"bg-sky-500\",\n    route: \"bg-indigo-500\",\n    prompt: \"bg-violet-500\",\n    model: \"bg-blue-600\",\n    tool: \"bg-emerald-500\",\n    \"side-effect\": \"bg-rose-500\",\n    output: \"bg-gray-800\",\n    empty: \"bg-gray-300\",\n  };\n  return map[phase] || \"bg-gray-400\";\n}\n\nfunction flowCardClass(active, nested) {\n  return [\n    \"flow-card w-full text-left rounded-lg border transition-all\",\n    \"focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200 focus-visible:ring-offset-1\",\n    nested ? \"border-gray-200/90 bg-gray-50/80\" : \"border-gray-200 bg-white shadow-sm\",\n    active ? \"!border-blue-500 ring-2 ring-blue-100\" : \"hover:border-gray-300 hover:shadow\",\n  ].join(\" \");\n}\n\nfunction flowStepMarker(step, active) {\n  if (step.nested) {\n    return (\n      '<div class=\"mt-3 flex h-2 w-2 shrink-0 rounded-full ' +\n      (active ? \"bg-blue-600\" : \"bg-gray-300\") +\n      '\" aria-hidden=\"true\"></div>'\n    );\n  }\n  return (\n    '<div class=\"mt-2.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold tabular-nums ' +\n    (active ? \"bg-blue-600 text-white shadow-sm\" : \"border border-gray-300 bg-white text-gray-600\") +\n    '\">' +\n    escapeHtml(String(step.order)) +\n    \"</div>\"\n  );\n}\n\nfunction section(title, body) {\n  return (\n    '<div class=\"grid gap-2\"><h3 class=\"text-xs font-semibold uppercase tracking-wide text-gray-500\">' +\n    escapeHtml(title) +\n    '</h3><div class=\"text-[15px] text-gray-800\">' +\n    body +\n    \"</div></div>\"\n  );\n}\n\nfunction paragraph(text, tone) {\n  return '<p class=\"leading-relaxed ' + (tone || \"text-gray-800\") + '\">' + escapeHtml(text) + \"</p>\";\n}\n\nfunction codeValue(value) {\n  return '<code class=\"font-mono text-sm text-gray-700 break-words\">' + escapeHtml(value || \"—\") + \"</code>\";\n}\n\nfunction detailList(items) {\n  return (\n    '<dl class=\"grid gap-2 text-sm\">' +\n    items\n      .map(function (item) {\n        return (\n          '<div class=\"grid gap-1 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-3\">' +\n          '<dt class=\"text-xs font-semibold uppercase tracking-wide text-gray-400\">' +\n          escapeHtml(item[0]) +\n          \"</dt>\" +\n          '<dd class=\"min-w-0 text-gray-800\">' +\n          item[1] +\n          \"</dd>\" +\n          \"</div>\"\n        );\n      })\n      .join(\"\") +\n    \"</dl>\"\n  );\n}\n\nfunction preBlock(text) {\n  return (\n    '<pre class=\"mt-2 max-h-64 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-gray-800 whitespace-pre-wrap break-words\">' +\n    escapeHtml(text || \"\") +\n    \"</pre>\"\n  );\n}\n\nfunction editorHref(item) {\n  const root = (trace.root || \"\").replace(/\\\\/g, \"/\");\n  const file = (item.file || \"\").replace(/\\\\/g, \"/\");\n  return \"vscode://file/\" + root + \"/\" + file + \":\" + item.line;\n}\n\nfunction locBar(item) {\n  const loc = item.file + \":\" + item.line;\n  return (\n    '<div class=\"flex flex-wrap items-center gap-2 text-sm\">' +\n    '<code class=\"font-mono text-xs text-gray-600\">' +\n    escapeHtml(loc) +\n    \"</code>\" +\n    '<a class=\"text-xs font-medium text-blue-600 hover:underline\" href=\"' +\n    escapeHtml(editorHref(item)) +\n    '\">Open in editor</a>' +\n    '<button type=\"button\" class=\"copy-path text-xs font-medium text-gray-500 hover:text-gray-900\" data-copy=\"' +\n    escapeHtml(loc) +\n    '\">Copy path</button>' +\n    \"</div>\"\n  );\n}\n\nfunction renderOutputDetail(step, chain) {\n  return (\n    '<div class=\"grid gap-4\">' +\n    '<h2 class=\"text-lg font-semibold text-gray-900\">' +\n    escapeHtml(step.title) +\n    \"</h2>\" +\n    section(\"What this means\", paragraph(step.note || \"The product shows the AI response to the user.\")) +\n    (chain\n      ? section(\n          \"Code details\",\n          detailList([\n            [\"Output\", codeValue(step.subtitle)],\n            [\"Model call\", codeValue(chain.type || \"model call\")],\n          ]),\n        ) +\n        locBar(chain) +\n        '<p class=\"text-xs text-gray-400 mt-2\">In the UI, streamed tokens appear in the chat component; non-stream responses render as a single message or JSON payload.</p>'\n      : \"\") +\n    \"</div>\"\n  );\n}\n\nfunction productMeaning(kind, item, step) {\n  if (kind === \"entrypoints\") {\n    return \"This is the product moment where a user starts the AI experience, usually by sending a message or prompt.\";\n  }\n  if (kind === \"routes\") {\n    return \"This backend endpoint receives the user's request and prepares the AI work.\";\n  }\n  if (kind === \"prompts\") {\n    return \"These instructions shape how the AI should behave before it answers the user.\";\n  }\n  if (kind === \"chains\") {\n    return \"This is where the app asks an AI model to generate the next response.\";\n  }\n  if (kind === \"tools\" && item && item.sideEffect) {\n    return \"The AI can call this helper to change something outside the chat, such as a database, payment, email, or another service.\";\n  }\n  if (kind === \"tools\") {\n    return \"The AI can call this helper to look up information before it answers.\";\n  }\n  return step && step.note ? step.note : \"This is one step in the AI flow.\";\n}\n\nfunction renderDetail(item, kind, step) {\n  if (step && step.phase === \"output\") {\n    const chainId = step.id.replace(/:output$/, \"\");\n    const chain = (trace.chains || []).find((c) => c.id === chainId);\n    return renderOutputDetail(step, chain);\n  }\n  if (!item) {\n    if (step && step.phase === \"empty\") {\n      return '<p class=\"text-[15px] text-gray-500\">' + escapeHtml(step.subtitle) + \"</p>\";\n    }\n    return '<p class=\"text-[15px] text-gray-500\">Select a step in the flow to inspect it.</p>';\n  }\n\n  const badges = [];\n  if (kind === \"tools\" && item.sideEffect) badges.push(badge(\"side effect\", \"high\"));\n  if (kind === \"prompts\" && item.inline) badges.push(badge(\"inline\", \"medium\"));\n  if (kind === \"chains\") {\n    if (!item.hasEval) badges.push(badge(\"no eval\", \"medium\"));\n    if (!item.hasTrace) badges.push(badge(\"no trace\", \"high\"));\n    else badges.push(badge(\"trace ok\", \"ok\"));\n  }\n\n  let body = \"\";\n  if (kind === \"prompts\") {\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      section(\"Prompt text\", preBlock(item.text || item.preview || \"No prompt text resolved\")) +\n      section(\n        \"Code details\",\n        detailList([\n          [\"Prompt type\", codeValue(item.kind)],\n          [\"Value source\", codeValue(item.valueType)],\n        ]),\n      );\n  } else if (kind === \"tools\") {\n    const schemaRows = (item.schemaFields || [])\n      .map(\n        (f) =>\n          '<tr class=\"border-t border-gray-100\"><td class=\"py-2 pr-4 font-mono text-xs\">' +\n          escapeHtml(f.name) +\n          '</td><td class=\"py-2 font-mono text-xs text-gray-600\">' +\n          escapeHtml(f.type) +\n          \"</td></tr>\",\n      )\n      .join(\"\");\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      (item.sideEffect\n        ? '<p class=\"rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800\">This can change real product state. Review permissions, logging, and tests before trusting model-triggered calls.</p>'\n        : \"\") +\n      section(\n        \"Code details\",\n        detailList([\n          [\"Tool name\", codeValue(item.name)],\n          [\"Description\", escapeHtml(item.descriptionFull || item.description || \"—\")],\n          [\"Can change state\", codeValue(item.sideEffect ? \"yes\" : \"no\")],\n        ]),\n      ) +\n      section(\n        \"Input data this tool expects\",\n        schemaRows\n          ? '<table class=\"w-full text-left\"><thead><tr><th class=\"pb-2 text-xs text-gray-500\">Field</th><th class=\"pb-2 text-xs text-gray-500\">Type</th></tr></thead><tbody>' +\n            schemaRows +\n            \"</tbody></table>\"\n          : '<p class=\"text-gray-500 text-sm\">' + escapeHtml(item.schema || \"No schema\") + \"</p>\",\n      );\n  } else if (kind === \"chains\") {\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      section(\n        \"Code details\",\n        detailList([\n          [\"Model\", codeValue(item.modelFull || item.model)],\n          [\"Prompt inputs\", escapeHtml((item.prompts || []).join(\"; \") || \"—\")],\n          [\"Tools available\", escapeHtml((item.tools || []).join(\", \") || \"—\")],\n        ]),\n      );\n  } else if (kind === \"routes\") {\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      section(\n        \"Code details\",\n        detailList([\n          [\"HTTP methods\", codeValue((item.methods || []).join(\", \") || \"unknown\")],\n          [\"AI code found\", codeValue((item.aiPatterns || []).join(\", \") || \"none\")],\n        ]),\n      );\n  } else if (kind === \"entrypoints\") {\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      section(\"How the user starts this\", codeValue(item.hook)) +\n      section(\"Where the message is sent\", codeValue(item.api));\n  }\n\n  return (\n    '<div class=\"grid gap-4\">' +\n    '<div class=\"flex flex-wrap items-start gap-2\"><h2 class=\"text-lg font-semibold text-gray-900 flex-1\">' +\n    escapeHtml(step ? displayStepTitle(step) : kind === \"prompts\" ? promptTitle(item, \"\") : item.name || item.hook) +\n    \"</h2>\" +\n    (badges.length ? '<div class=\"flex flex-wrap gap-1\">' + badges.join(\"\") + \"</div>\" : \"\") +\n    \"</div>\" +\n    body +\n    locBar(item) +\n    \"</div>\"\n  );\n}\n\nfunction riskTone(severity) {\n  if (severity === \"high\") return \"high\";\n  if (severity === \"medium\") return \"medium\";\n  return \"low\";\n}\n\nfunction renderRiskTimeline(risks) {\n  if (!risks.length) {\n    return '<p class=\"text-sm text-gray-500\">No risks detected for this agent.</p>';\n  }\n  return (\n    '<ol class=\"grid gap-3 list-none m-0 p-0\">' +\n    risks\n      .map(function (risk, index) {\n        const active = state.selectedId === risk.id;\n        return (\n          '<li><button type=\"button\" class=\"' +\n          flowCardClass(active, false) +\n          '\" data-risk-id=\"' +\n          escapeHtml(risk.id) +\n          '\">' +\n          '<div class=\"flex gap-3 px-3.5 py-3\">' +\n          '<div class=\"w-1 shrink-0 rounded-full ' +\n          (risk.severity === \"high\" ? \"bg-red-500\" : risk.severity === \"medium\" ? \"bg-amber-500\" : \"bg-gray-400\") +\n          '\" aria-hidden=\"true\"></div>' +\n          '<div class=\"min-w-0 flex-1\">' +\n          '<div class=\"flex flex-wrap items-center gap-2\">' +\n          '<span class=\"text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400\">Risk ' +\n          escapeHtml(String(index + 1)) +\n          \"</span>\" +\n          badge(risk.severity || \"risk\", riskTone(risk.severity)) +\n          \"</div>\" +\n          '<div class=\"mt-1 text-[15px] font-medium leading-snug text-gray-900\">' +\n          escapeHtml(risk.message || \"Risk\") +\n          \"</div>\" +\n          '<div class=\"mt-1 font-mono text-[12px] leading-relaxed text-gray-500 break-all\">' +\n          escapeHtml((risk.kind || \"risk\") + \" · \" + risk.file + \":\" + risk.line) +\n          \"</div>\" +\n          \"</div></div></button></li>\"\n        );\n      })\n      .join(\"\") +\n    \"</ol>\"\n  );\n}\n\nfunction renderRiskDetail(risk) {\n  if (!risk) return '<p class=\"text-[15px] text-gray-500\">Select a risk to inspect it.</p>';\n  return (\n    '<div class=\"grid gap-4\">' +\n    '<div class=\"flex flex-wrap items-start gap-2\"><h2 class=\"text-lg font-semibold text-gray-900 flex-1\">' +\n    escapeHtml(risk.message || \"Risk\") +\n    \"</h2>\" +\n    '<div class=\"flex flex-wrap gap-1\">' +\n    badge(risk.severity || \"risk\", riskTone(risk.severity)) +\n    badge(risk.kind || \"risk\", \"low\") +\n    \"</div></div>\" +\n    locBar(risk) +\n    section(\"Why this was flagged\", preBlock(risk.evidenceFull || risk.evidence || \"No evidence captured\")) +\n    section(\"Recommended next step\", '<p class=\"text-[15px] leading-relaxed text-gray-800\">' + escapeHtml(risk.fix || \"Review this risk in the referenced code path.\") + \"</p>\") +\n    (risk.targetId ? section(\"Code target\", '<code class=\"font-mono text-xs text-gray-600\">' + escapeHtml(risk.targetId) + \"</code>\") : \"\") +\n    \"</div>\"\n  );\n}\n\nfunction renderFlowTimeline(steps) {\n  if (!steps.length) {\n    return '<p class=\"text-sm text-gray-500\">No execution flow for this agent.</p>';\n  }\n  return (\n    '<ol class=\"flow-track list-none m-0 p-0\">' +\n    steps\n      .map(function (step, index) {\n        const meta = PHASE_META[step.phase] || PHASE_META.empty;\n        const active = state.selectedId === step.id;\n        const nested = !!step.nested;\n        const isLast = index === steps.length - 1;\n        const railPad = nested ? \"pt-0\" : \"pt-0\";\n        return (\n          '<li class=\"flow-step grid grid-cols-[2.75rem_minmax(0,1fr)] gap-x-3' +\n          (nested ? \" flow-step-nested\" : \"\") +\n          '\">' +\n          '<div class=\"flow-rail flex flex-col items-center ' +\n          railPad +\n          '\">' +\n          flowStepMarker(step, active) +\n          (!isLast ? '<div class=\"flow-rail-line w-px flex-1 min-h-3 bg-gray-200 mt-1\"></div>' : \"\") +\n          \"</div>\" +\n          '<div class=\"pb-3 min-w-0\">' +\n          '<button type=\"button\" class=\"' +\n          flowCardClass(active, nested) +\n          '\" data-flow-id=\"' +\n          escapeHtml(step.id) +\n          '\" data-flow-kind=\"' +\n          escapeHtml(step.kind) +\n          '\">' +\n          '<div class=\"flex gap-3 px-3.5 py-3\">' +\n          '<div class=\"w-1 shrink-0 rounded-full ' +\n          phaseAccent(step.phase) +\n          '\" aria-hidden=\"true\"></div>' +\n          '<div class=\"min-w-0 flex-1\">' +\n          '<div class=\"text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400\">' +\n          escapeHtml(meta.label) +\n          \"</div>\" +\n          '<div class=\"mt-1 text-[15px] font-medium leading-snug text-gray-900\">' +\n          escapeHtml(displayStepTitle(step)) +\n          \"</div>\" +\n          '<div class=\"mt-1 font-mono text-[12px] leading-relaxed text-gray-500 break-all\">' +\n          escapeHtml(step.subtitle) +\n          \"</div>\" +\n          \"</div>\" +\n          \"</div>\" +\n          \"</button>\" +\n          \"</div>\" +\n          \"</li>\"\n        );\n      })\n      .join(\"\") +\n    \"</ol>\"\n  );\n}\n\nasync function copyText(value) {\n  try {\n    if (navigator.clipboard && window.isSecureContext) {\n      await navigator.clipboard.writeText(value);\n      return;\n    }\n  } catch (e) {}\n  const ta = document.createElement(\"textarea\");\n  ta.value = value;\n  document.body.appendChild(ta);\n  ta.select();\n  document.execCommand(\"copy\");\n  document.body.removeChild(ta);\n}\n\nfunction render() {\n  const agent = currentAgent();\n  const steps = flowStepsForAgent(state.agentId);\n  const risks = byAgent(trace.risks || []);\n\n  document.querySelector(\"#agents\").innerHTML =\n    (trace.agents || [])\n      .map(function (item) {\n        return (\n          '<button type=\"button\" class=\"' +\n          agentButtonClass(item.id === state.agentId) +\n          '\" data-agent=\"' +\n          escapeHtml(item.id) +\n          '\">' +\n          escapeHtml(item.name) +\n          \"</button>\"\n        );\n      })\n      .join(\"\") ||\n    '<span class=\"text-sm text-gray-500\">No agents detected</span>';\n\n  document.querySelectorAll(\"[data-agent]\").forEach(function (button) {\n    button.addEventListener(\"click\", function () {\n      state.agentId = button.dataset.agent;\n      state.selectedId = \"\";\n      state.kind = \"\";\n      render();\n    });\n  });\n\n  const agentName = document.querySelector(\"#agent-name\");\n  if (agentName) agentName.textContent = agent ? agent.name : \"No agent detected\";\n  const agentDescription = document.querySelector(\"#agent-description\");\n  if (agentDescription) {\n    agentDescription.textContent = agent\n      ? agent.description || \"Static scan found agent-like behavior in this code path.\"\n      : \"Run the scanner on a repo with AI SDK routes or client hooks.\";\n  }\n\n  const tabs = document.querySelector(\"#view-tabs\");\n  if (tabs) {\n    tabs.innerHTML =\n      '<button type=\"button\" class=\"' +\n      viewButtonClass(state.view === \"report\") +\n      '\" data-view=\"report\">Report</button>' +\n      '<button type=\"button\" class=\"' +\n      viewButtonClass(state.view === \"risks\") +\n      '\" data-view=\"risks\">Risks ' +\n      escapeHtml(String(risks.length)) +\n      \"</button>\";\n    tabs.querySelectorAll(\"[data-view]\").forEach(function (button) {\n      button.addEventListener(\"click\", function () {\n        state.view = button.dataset.view;\n        state.selectedId = \"\";\n        state.kind = \"\";\n        render();\n      });\n    });\n  }\n\n  const noteEl = document.querySelector(\"#flow-note\");\n  const kicker = document.querySelector(\"#section-kicker\");\n  if (kicker) kicker.textContent = state.view === \"risks\" ? \"Risks\" : \"User journey\";\n  if (noteEl) {\n    noteEl.textContent =\n      state.view === \"risks\"\n        ? \"Static risks found for the selected agent. Treat these as review targets, not runtime proof.\"\n        : trace.flowNote || \"\";\n  }\n\n  if (state.view === \"risks\") {\n    if (!state.selectedId && risks[0]) {\n      state.selectedId = risks[0].id;\n      state.kind = \"risks\";\n    }\n    const currentRisk = risks.find(function (risk) {\n      return risk.id === state.selectedId;\n    });\n    if (state.selectedId && !currentRisk && risks[0]) {\n      state.selectedId = risks[0].id;\n      state.kind = \"risks\";\n    }\n\n    document.querySelector(\"#flow-timeline\").innerHTML = renderRiskTimeline(risks);\n    document.querySelectorAll(\"[data-risk-id]\").forEach(function (button) {\n      button.addEventListener(\"click\", function () {\n        state.selectedId = button.dataset.riskId;\n        state.kind = \"risks\";\n        render();\n      });\n    });\n\n    const risk = risks.find(function (item) {\n      return item.id === state.selectedId;\n    });\n    const riskIndex = risk ? risks.findIndex((item) => item.id === risk.id) + 1 : 0;\n    document.querySelector(\"#detail-title\").textContent = risk ? \"Risk \" + riskIndex + \" · \" + (risk.severity || \"review\") : \"Risk details\";\n    const detailBox = document.querySelector(\"#detail-box\");\n    detailBox.className =\n      \"min-h-[280px] rounded-xl bg-white p-5 shadow-sm \" +\n      (risk ? \"border-2 border-blue-500 ring-2 ring-blue-50\" : \"border border-gray-200\");\n    detailBox.innerHTML = renderRiskDetail(risk);\n\n    document.querySelectorAll(\".copy-path\").forEach(function (button) {\n      button.addEventListener(\"click\", function () {\n        copyText(button.dataset.copy);\n      });\n    });\n    return;\n  }\n\n  if (!state.selectedId && steps[0]) {\n    state.selectedId = steps[0].id;\n    state.kind = steps[0].kind;\n  }\n  const currentStep = steps.find(function (s) {\n    return s.id === state.selectedId;\n  });\n  if (state.selectedId && !currentStep && steps[0]) {\n    state.selectedId = steps[0].id;\n    state.kind = steps[0].kind;\n  }\n\n  document.querySelector(\"#flow-timeline\").innerHTML = renderFlowTimeline(steps);\n  document.querySelectorAll(\"[data-flow-id]\").forEach(function (button) {\n    button.addEventListener(\"click\", function () {\n      state.selectedId = button.dataset.flowId;\n      state.kind = button.dataset.flowKind;\n      render();\n    });\n  });\n\n  const step = steps.find(function (s) {\n    return s.id === state.selectedId;\n  });\n  const item = findItem(state.kind, state.selectedId);\n  document.querySelector(\"#detail-title\").textContent = step ? \"Step \" + step.order + \" · \" + (PHASE_META[step.phase]?.label || \"Details\") : \"Step details\";\n  const detailBox = document.querySelector(\"#detail-box\");\n  detailBox.className =\n    \"min-h-[280px] rounded-xl bg-white p-5 shadow-sm \" +\n    (step ? \"border-2 border-blue-500 ring-2 ring-blue-50\" : \"border border-gray-200\");\n  detailBox.innerHTML = renderDetail(item, state.kind, step);\n\n  document.querySelectorAll(\".copy-path\").forEach(function (button) {\n    button.addEventListener(\"click\", function () {\n      copyText(button.dataset.copy);\n    });\n  });\n}\n\nrender();\n";
   return `<!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Observe Report</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23101410'/%3E%3Cpath d='M16 32c5-9 11-13 16-13s11 4 16 13c-5 9-11 13-16 13s-11-4-16-13Z' fill='none' stroke='%23f4f7ef' stroke-width='5' stroke-linejoin='round'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%232f80ed'/%3E%3C/svg%3E" />
+    <meta name="description" content="Local Agent Observe scan results for prompts, tools, model calls, routes, and risks." />
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ["Inter", "sans-serif"],
+              mono: ["JetBrains Mono", "monospace"],
+            },
+            colors: {
+              gray: {
+                50: "#fafafa",
+                100: "#f5f5f5",
+                200: "#e5e5e5",
+                300: "#d4d4d4",
+                400: "#a3a3a3",
+                500: "#737373",
+                600: "#525252",
+                700: "#404040",
+                800: "#262626",
+                900: "#171717",
+              },
+            },
+          },
+        },
+      };
+    </script>
     <style>
-      :root { color-scheme: light; --bg: #f7f8f5; --panel: #fff; --ink: #171a16; --muted: #637063; --line: #d7ddd2; --blue: #2f80ed; --red: #b4372f; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      * { box-sizing: border-box; }
-      body { margin: 0; background: var(--bg); color: var(--ink); }
-      main { width: min(1040px, calc(100vw - 32px)); margin: 0 auto; padding: 28px 0 40px; display: grid; gap: 22px; }
-      header { display: flex; justify-content: space-between; gap: 18px; align-items: end; border-bottom: 1px solid var(--line); padding-bottom: 18px; }
-      h1 { margin: 0; font-size: clamp(34px, 6vw, 64px); line-height: .96; letter-spacing: 0; }
-      h2 { margin: 0 0 12px; font-size: 18px; letter-spacing: 0; }
-      p { margin: 0; color: var(--muted); line-height: 1.45; }
-      code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-      section, .panel { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 18px; box-shadow: 0 14px 40px rgba(35, 44, 30, .07); }
-      .trust { max-width: 330px; border-left: 3px solid #1b7c55; padding-left: 12px; }
-      .summary { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 10px; }
-      .metric { border: 1px solid var(--line); border-radius: 7px; padding: 14px; background: #fbfcf9; text-align: center; }
-      .metric strong { display: block; font-size: 28px; }
-      .metric span { color: var(--muted); font-size: 12px; }
-      .agents { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
-      .agent-button { min-width: 150px; border: 2px solid #1f271d; border-radius: 8px; background: #fff; color: var(--ink); padding: 16px 18px; cursor: pointer; font: inherit; font-weight: 760; }
-      .agent-button.active { border-color: var(--blue); color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); }
-      .workspace { display: grid; grid-template-columns: minmax(260px, .95fr) minmax(300px, 1.05fr); gap: 28px; align-items: start; }
-      .agent-title { color: var(--blue); text-align: center; font-size: 30px; margin: 0 0 10px; }
-      .agent-description { max-width: 620px; margin: 0 auto 22px; text-align: center; font-size: 14px; }
-      .evidence-list { display: grid; gap: 12px; }
-      .evidence-button { width: 100%; border: 2px solid #1f271d; border-radius: 7px; background: #fff; color: var(--ink); padding: 18px; text-align: center; cursor: pointer; font: inherit; font-weight: 760; }
-      .evidence-button.active { border-color: var(--blue); color: var(--blue); }
-      .evidence-button small { display: block; margin-top: 4px; color: var(--muted); font-weight: 500; }
-      .detail-title { text-align: center; margin-bottom: 12px; font-weight: 760; }
-      .detail-box { min-height: 260px; border: 2px solid var(--blue); border-radius: 7px; background: #fff; padding: 18px; display: grid; gap: 12px; align-content: start; }
-      .row { border-top: 1px solid var(--line); padding-top: 10px; }
-      .row:first-child { border-top: 0; padding-top: 0; }
-      .row span { display: block; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
-      .row strong { display: block; margin-top: 5px; }
-      .row code { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
-      .empty { color: var(--muted); background: #f1f4ef; border-radius: 7px; padding: 12px; }
-      @media (max-width: 860px) { header, .workspace { grid-template-columns: 1fr; display: grid; } .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .trust { max-width: none; } }
+      body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+      .flow-step-nested .flow-rail { padding-left: 0.35rem; }
+      .flow-step-nested .flow-card { margin-left: 0.25rem; }
+      #flow-timeline { padding-left: 0.15rem; }
     </style>
   </head>
-  <body>
-    <main>
-      <header>
-        <div>
-          <h1>Agent Observe Report</h1>
-          <p>Initial scan scope: <strong>${escapeHtml(trace.selection.label || "All detected agents")}</strong></p>
+  <body class="bg-white text-gray-900 selection:bg-gray-900 selection:text-white min-h-screen flex flex-col relative overflow-x-hidden">
+    <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[400px] opacity-[0.15] pointer-events-none" style="background: radial-gradient(ellipse at top, #000000 0%, transparent 70%)"></div>
+    <main class="flex-grow w-full max-w-6xl mx-auto px-6 pt-10 pb-16 relative z-10 space-y-4">
+      <div>
+        <div class="flex flex-wrap gap-2 mb-3" id="agents" aria-label="Select agent"></div>
+        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900" id="agent-name">Results</h1>
+        <p class="mt-1 max-w-3xl text-[15px] leading-relaxed text-gray-600" id="agent-description"></p>
+        <p class="mt-1 text-[13px] text-gray-500">Scope: <span class="font-medium text-gray-900">${selectionLabel}</span> · ${generatedAt}</p>
+      </div>
+      <section class="p-4 sm:p-5 rounded-2xl border border-gray-200 bg-white shadow-sm" aria-label="Agent execution flow">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p class="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1" id="section-kicker">User journey</p>
+            <p class="text-[12px] text-gray-500 leading-relaxed" id="flow-note"></p>
+          </div>
+          <div class="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1" id="view-tabs" aria-label="Report view"></div>
         </div>
-        <p class="trust">Your code stayed local. Generated from static analysis at <code>${escapeHtml(trace.generatedAt)}</code>.</p>
-      </header>
-
-      <section>
-        <h2>Overall</h2>
-        <div class="summary" id="summary"></div>
-      </section>
-
-      <section>
-        <h2>Agents</h2>
-        <div class="agents" id="agents"></div>
-      </section>
-
-      <section class="workspace">
-        <div>
-          <h2 class="agent-title" id="agent-title">Agent</h2>
-          <p class="agent-description" id="agent-description"></p>
-          <div class="evidence-list" id="evidence-list"></div>
-        </div>
-        <div>
-          <div class="detail-title" id="detail-title">Details</div>
-          <div class="detail-box" id="detail-box"></div>
+        <div class="grid lg:grid-cols-[minmax(300px,1fr)_minmax(300px,1fr)] gap-8 lg:gap-10 items-start">
+          <div class="max-h-[min(72vh,720px)] overflow-y-auto pr-2 -mr-2" id="flow-timeline"></div>
+          <div class="lg:sticky lg:top-6">
+            <div class="text-[13px] font-semibold uppercase tracking-wide text-gray-500 mb-3" id="detail-title">Step details</div>
+            <div class="min-h-[280px] rounded-xl border border-gray-200 bg-white p-5 shadow-sm" id="detail-box"></div>
+          </div>
         </div>
       </section>
     </main>
     <script>
       const trace = ${json};
-      const state = { agentId: (trace.agents || [])[0]?.id || "", kind: "entrypoints" };
-      const kinds = [
-        ["entrypoints", "Entry points"],
-        ["tools", "Tool calls"],
-        ["prompts", "Prompts"],
-        ["chains", "Model calls"],
-        ["routes", "Routes"],
-        ["risks", "Risks"],
-      ];
-      const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
-      const byAgent = (items) => (items || []).filter((item) => item.agentId === state.agentId);
-      const currentAgent = () => (trace.agents || []).find((agent) => agent.id === state.agentId) || null;
-      function rows(kind) {
-        if (kind === "entrypoints") return byAgent(trace.uiEntrypoints).map((entry) => ({ meta: "UI entry", title: entry.hook, code: entry.file + ":" + entry.line + " · API: " + entry.api }));
-        if (kind === "tools") return byAgent(trace.tools).map((tool) => ({ meta: tool.sideEffect ? "side-effect tool" : "tool", title: tool.name, code: "Description: " + tool.description + "\\nSchema: " + tool.schema + "\\nExecute handler: " + (tool.hasExecute ? "yes" : "no") + "\\nSide effects: " + (tool.sideEffect ? "yes" : "no") + "\\nSource: " + tool.file + ":" + tool.line + "\\nEvidence: " + tool.evidence }));
-        if (kind === "prompts") return byAgent(trace.prompts).map((prompt) => ({ meta: prompt.kind, title: prompt.name || prompt.valueType || "Prompt", code: "Source: " + prompt.file + ":" + prompt.line + "\\nValue type: " + prompt.valueType + "\\nPrompt text:\\n" + (prompt.text || prompt.preview || "No prompt text resolved") }));
-        if (kind === "chains") return byAgent(trace.chains).map((chain) => ({ meta: chain.type, title: chain.model, code: chain.file + ":" + chain.line + " · tools: " + ((chain.tools || []).join(", ") || "none") }));
-        if (kind === "routes") return byAgent(trace.routes).map((route) => ({ meta: route.kind, title: route.file, code: "methods: " + ((route.methods || []).join(", ") || "unknown") + " · AI: " + ((route.aiPatterns || []).join(", ") || "none") }));
-        return byAgent(trace.risks).map((risk) => ({ meta: risk.severity + " / " + risk.kind, title: risk.message, code: risk.file + ":" + risk.line }));
-      }
-      function count(kind) {
-        if (kind === "entrypoints") return byAgent(trace.uiEntrypoints).length;
-        return rows(kind).length;
-      }
-      function render() {
-        const agent = currentAgent();
-        const summary = [
-          ["Agents", trace.summary?.agents || 0],
-          ["Entry points", trace.summary?.uiEntrypoints || 0],
-          ["Prompts", trace.summary?.prompts || 0],
-          ["Tool calls", trace.summary?.tools || 0],
-          ["Model calls", trace.summary?.chains || 0],
-          ["Routes", trace.summary?.routes || 0],
-          ["Risks", trace.summary?.risks || 0],
-        ];
-        document.querySelector("#summary").innerHTML = summary.map(([label, value]) => '<div class="metric"><strong>' + escapeHtml(value) + '</strong><span>' + escapeHtml(label) + '</span></div>').join("");
-        document.querySelector("#agents").innerHTML = (trace.agents || []).map((item) => '<button type="button" class="agent-button ' + (item.id === state.agentId ? "active" : "") + '" data-agent="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + '</button>').join("") || '<p class="empty">No agent candidates detected.</p>';
-        document.querySelectorAll("[data-agent]").forEach((button) => button.addEventListener("click", () => { state.agentId = button.dataset.agent; render(); }));
-        document.querySelector("#agent-title").textContent = agent ? agent.name : "No agent selected";
-        document.querySelector("#agent-description").textContent = agent?.description || "Select an agent to see its inferred purpose from static evidence.";
-        document.querySelector("#evidence-list").innerHTML = kinds.map(([kind, label]) => '<button type="button" class="evidence-button ' + (kind === state.kind ? "active" : "") + '" data-kind="' + kind + '">' + label + '<small>' + count(kind) + ' detected</small></button>').join("");
-        document.querySelectorAll("[data-kind]").forEach((button) => button.addEventListener("click", () => { state.kind = button.dataset.kind; render(); }));
-        const label = kinds.find(([kind]) => kind === state.kind)?.[1] || "Details";
-        document.querySelector("#detail-title").textContent = label + " info";
-        const detailRows = rows(state.kind);
-        document.querySelector("#detail-box").innerHTML = detailRows.map((row) => '<div class="row"><span>' + escapeHtml(row.meta) + '</span><strong>' + escapeHtml(row.title) + '</strong><code>' + escapeHtml(row.code) + '</code></div>').join("") || '<p class="empty">No ' + escapeHtml(label.toLowerCase()) + ' detected for this agent.</p>';
-      }
-      render();
+      ${clientScript}
     </script>
   </body>
 </html>
@@ -1160,45 +1484,37 @@ import { useMemo, useState } from "react";
 const data = ${JSON.stringify(data, null, 2)} as any;
 
 const colors = { bg: "#f7f8f5", panel: "#fff", ink: "#171a16", muted: "#637063", line: "#d7ddd2", blue: "#2f80ed" };
-const kinds = [["entrypoints", "Entry points"], ["tools", "Tool calls"], ["prompts", "Prompts"], ["chains", "Model calls"], ["routes", "Routes"], ["risks", "Risks"]] as const;
-
-function Metric({ label, value }: { label: string; value: number }) {
-  return <div style={{ border: "1px solid " + colors.line, borderRadius: 7, padding: 14, background: "#fbfcf9", textAlign: "center" }}><strong style={{ display: "block", fontSize: 28 }}>{value}</strong><span style={{ color: colors.muted, fontSize: 12 }}>{label}</span></div>;
-}
+const reportKinds = [["entrypoints", "Entry points"], ["tools", "Tool calls"], ["prompts", "Prompts"], ["chains", "Model calls"], ["routes", "Routes"]] as const;
+const riskKinds = [["risks", "Risks"]] as const;
 
 export default function AgentObserveSkillPage() {
   const [agentId, setAgentId] = useState<string>(data.agents[0]?.id || "");
+  const [view, setView] = useState<string>("report");
   const [kind, setKind] = useState<string>("entrypoints");
   const agent = data.agents.find((item: any) => item.id === agentId);
   const byAgent = (items: any[]) => (items || []).filter((item: any) => item.agentId === agentId);
+  const kinds = view === "risks" ? riskKinds : reportKinds;
+  const promptTitle = (prompt: any) => prompt.kind === "system" ? "System instructions are added" : prompt.kind === "messages" ? "Conversation context is added" : prompt.valueType === "reference" ? "User instructions are added from a shared reference" : prompt.valueType === "named constant" ? "User instructions are added from a named prompt" : "User instructions are added";
   const rows = useMemo(() => {
-    if (kind === "entrypoints") return byAgent(data.uiEntrypoints).map((entry: any) => ({ meta: "UI entry", title: entry.hook, code: entry.file + ":" + entry.line + " · API: " + entry.api }));
-    if (kind === "tools") return byAgent(data.tools).map((tool: any) => ({ meta: tool.sideEffect ? "side-effect tool" : "tool", title: tool.name, code: "Description: " + tool.description + "\\nSchema: " + tool.schema + "\\nExecute handler: " + (tool.hasExecute ? "yes" : "no") + "\\nSide effects: " + (tool.sideEffect ? "yes" : "no") + "\\nSource: " + tool.file + ":" + tool.line + "\\nEvidence: " + tool.evidence }));
-    if (kind === "prompts") return byAgent(data.prompts).map((prompt: any) => ({ meta: prompt.kind, title: prompt.name || prompt.valueType || "Prompt", code: "Source: " + prompt.file + ":" + prompt.line + "\\nValue type: " + prompt.valueType + "\\nPrompt text:\\n" + (prompt.text || prompt.preview || "No prompt text resolved") }));
-    if (kind === "chains") return byAgent(data.chains).map((chain: any) => ({ meta: chain.type, title: chain.model, code: chain.file + ":" + chain.line + " · tools: " + ((chain.tools || []).join(", ") || "none") }));
-    if (kind === "routes") return byAgent(data.routes).map((route: any) => ({ meta: route.kind, title: route.file, code: "methods: " + ((route.methods || []).join(", ") || "unknown") + " · AI: " + ((route.aiPatterns || []).join(", ") || "none") }));
+    if (kind === "entrypoints") return byAgent(data.uiEntrypoints).map((entry: any) => ({ meta: "User entry", title: "User sends a chat message", code: "What this means: this is where someone starts the AI experience.\\nHow the user starts this: " + entry.hook + "\\nWhere the message is sent: " + entry.api + "\\nCode: " + entry.file + ":" + entry.line }));
+    if (kind === "tools") return byAgent(data.tools).map((tool: any) => ({ meta: tool.sideEffect ? "Action" : "Lookup", title: tool.sideEffect ? "AI can change something outside the chat" : "AI can look up information", code: "What this means: " + (tool.sideEffect ? "the AI can call this helper to change product state, so permissions and logging matter." : "the AI can call this helper to fetch information before answering.") + "\\nTool name: " + tool.name + "\\nDescription: " + tool.description + "\\nInput data: " + tool.schema + "\\nCode: " + tool.file + ":" + tool.line }));
+    if (kind === "prompts") return byAgent(data.prompts).map((prompt: any) => ({ meta: prompt.kind, title: promptTitle(prompt), code: "What this means: these instructions shape how the AI behaves before it answers.\\nSource: " + prompt.file + ":" + prompt.line + "\\nValue source: " + prompt.valueType + "\\nPrompt text:\\n" + (prompt.text || prompt.preview || "No prompt text resolved") }));
+    if (kind === "chains") return byAgent(data.chains).map((chain: any) => ({ meta: chain.type, title: "AI generates a response", code: "What this means: the app asks an AI model to produce the next response.\\nModel: " + chain.model + "\\nTools available: " + ((chain.tools || []).join(", ") || "none") + "\\nCode: " + chain.file + ":" + chain.line }));
+    if (kind === "routes") return byAgent(data.routes).map((route: any) => ({ meta: route.kind, title: "App sends the message to the backend", code: "What this means: this endpoint receives the user's request and prepares the AI work.\\nMethods: " + ((route.methods || []).join(", ") || "unknown") + "\\nAI code found: " + ((route.aiPatterns || []).join(", ") || "none") + "\\nCode: " + route.file }));
     return byAgent(data.risks).map((risk: any) => ({ meta: risk.severity + " / " + risk.kind, title: risk.message, code: risk.file + ":" + risk.line }));
   }, [agentId, kind]);
   const count = (item: string) => item === "entrypoints" ? byAgent(data.uiEntrypoints).length : (item === "routes" ? byAgent(data.routes).length : item === "tools" ? byAgent(data.tools).length : item === "prompts" ? byAgent(data.prompts).length : item === "chains" ? byAgent(data.chains).length : byAgent(data.risks).length);
   const activeLabel = kinds.find(([item]) => item === kind)?.[1] || "Details";
-  const summary = [["Agents", data.summary.agents], ["Entry points", data.summary.uiEntrypoints], ["Prompts", data.summary.prompts], ["Tool calls", data.summary.tools], ["Model calls", data.summary.chains], ["Routes", data.summary.routes], ["Risks", data.summary.risks]] as const;
   return (
-    <main style={{ minHeight: "100vh", background: colors.bg, color: colors.ink, padding: 28 }}>
-      <div style={{ maxWidth: 1040, margin: "0 auto", display: "grid", gap: 22 }}>
-        <header style={{ display: "flex", justifyContent: "space-between", gap: 18, alignItems: "end", borderBottom: "1px solid " + colors.line, paddingBottom: 18 }}>
-          <div><h1 style={{ margin: 0, fontSize: "clamp(34px, 6vw, 64px)", lineHeight: .96 }}>Agent Observe Report</h1><p style={{ margin: "8px 0 0", color: colors.muted }}>Initial scan scope: <strong>{data.selected}</strong></p></div>
-          <p style={{ maxWidth: 330, margin: 0, color: colors.muted, borderLeft: "3px solid #1b7c55", paddingLeft: 12 }}>Your code stayed local. Generated at <code>{data.generatedAt}</code>.</p>
-        </header>
-        <section style={{ border: "1px solid " + colors.line, borderRadius: 8, background: colors.panel, padding: 18 }}>
-          <h2 style={{ margin: "0 0 12px" }}>Overall</h2>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 10 }}>{summary.map(([label, value]) => <Metric key={label} label={label} value={value} />)}</div>
-        </section>
-        <section style={{ border: "1px solid " + colors.line, borderRadius: 8, background: colors.panel, padding: 18 }}>
-          <h2 style={{ margin: "0 0 12px" }}>Agents</h2>
+    <main style={{ minHeight: "100vh", background: "#fff", color: "#171717", padding: "64px 24px 96px", fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif" }}>
+      <div style={{ maxWidth: 1152, margin: "0 auto", display: "grid", gap: 24 }}>
+        <div><h1 style={{ margin: 0, fontSize: "clamp(2rem, 5vw, 3.25rem)", fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.05 }}>Results</h1><p style={{ margin: "12px 0 0", color: "#737373", fontSize: 15 }}>Scope: <strong style={{ color: "#171717" }}>{data.selected}</strong> · Generated {data.generatedAt}</p></div>
+        <section style={{ border: "1px solid #e5e5e5", borderRadius: 16, background: "#fff", padding: "24px 32px", boxShadow: "0 1px 2px rgba(0,0,0,0.04)" }}>
+          <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 600 }}>Agents</h2>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center" }}>{data.agents.map((item: any) => <button key={item.id} type="button" onClick={() => setAgentId(item.id)} style={{ minWidth: 150, border: "2px solid " + (item.id === agentId ? colors.blue : "#1f271d"), borderRadius: 8, background: "#fff", color: item.id === agentId ? colors.blue : colors.ink, padding: "16px 18px", cursor: "pointer", font: "inherit", fontWeight: 760 }}>{item.name}</button>)}</div>
         </section>
         <section style={{ border: "1px solid " + colors.line, borderRadius: 8, background: colors.panel, padding: 18, display: "grid", gridTemplateColumns: "minmax(260px, .95fr) minmax(300px, 1.05fr)", gap: 28 }}>
-          <div><h2 style={{ color: colors.blue, textAlign: "center", fontSize: 30, margin: "0 0 10px" }}>{agent?.name || "No agent selected"}</h2><p style={{ maxWidth: 620, margin: "0 auto 22px", color: colors.muted, textAlign: "center", fontSize: 14, lineHeight: 1.45 }}>{agent?.description || "Select an agent to see its inferred purpose from static evidence."}</p><div style={{ display: "grid", gap: 12 }}>{kinds.map(([item, label]) => <button key={item} type="button" onClick={() => setKind(item)} style={{ width: "100%", border: "2px solid " + (item === kind ? colors.blue : "#1f271d"), borderRadius: 7, background: "#fff", color: item === kind ? colors.blue : colors.ink, padding: 18, cursor: "pointer", font: "inherit", fontWeight: 760 }}>{label}<small style={{ display: "block", marginTop: 4, color: colors.muted, fontWeight: 500 }}>{count(item)} detected</small></button>)}</div></div>
+          <div><h2 style={{ color: colors.blue, textAlign: "center", fontSize: 30, margin: "0 0 10px" }}>{agent?.name || "No agent selected"}</h2><p style={{ maxWidth: 620, margin: "0 auto 22px", color: colors.muted, textAlign: "center", fontSize: 14, lineHeight: 1.45 }}>{agent?.description || "Select an agent to see its inferred purpose from static evidence."}</p><div style={{ display: "inline-flex", gap: 6, border: "1px solid " + colors.line, borderRadius: 8, padding: 4, marginBottom: 14 }}><button type="button" onClick={() => { setView("report"); setKind("entrypoints"); }} style={{ border: 0, borderRadius: 6, background: view === "report" ? colors.blue : "#fff", color: view === "report" ? "#fff" : colors.muted, padding: "8px 12px", cursor: "pointer", font: "inherit", fontWeight: 700 }}>Report</button><button type="button" onClick={() => { setView("risks"); setKind("risks"); }} style={{ border: 0, borderRadius: 6, background: view === "risks" ? colors.blue : "#fff", color: view === "risks" ? "#fff" : colors.muted, padding: "8px 12px", cursor: "pointer", font: "inherit", fontWeight: 700 }}>Risks</button></div><div style={{ display: "grid", gap: 12 }}>{kinds.map(([item, label]) => <button key={item} type="button" onClick={() => setKind(item)} style={{ width: "100%", border: "2px solid " + (item === kind ? colors.blue : "#1f271d"), borderRadius: 7, background: "#fff", color: item === kind ? colors.blue : colors.ink, padding: 18, cursor: "pointer", font: "inherit", fontWeight: 760 }}>{label}<small style={{ display: "block", marginTop: 4, color: colors.muted, fontWeight: 500 }}>{count(item)} detected</small></button>)}</div></div>
           <div><div style={{ textAlign: "center", marginBottom: 12, fontWeight: 760 }}>{activeLabel} info</div><div style={{ minHeight: 260, border: "2px solid " + colors.blue, borderRadius: 7, background: "#fff", padding: 18, display: "grid", gap: 12, alignContent: "start" }}>{rows.length ? rows.map((row: any, index: number) => <div key={index} style={{ borderTop: index ? "1px solid " + colors.line : 0, paddingTop: index ? 10 : 0 }}><span style={{ display: "block", color: colors.muted, fontSize: 11, letterSpacing: ".08em", textTransform: "uppercase" }}>{row.meta}</span><strong style={{ display: "block", marginTop: 5 }}>{row.title}</strong><code style={{ display: "block", marginTop: 6, color: colors.muted, fontSize: 12, overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{row.code}</code></div>) : <p style={{ color: colors.muted }}>No {activeLabel.toLowerCase()} detected for this agent.</p>}</div></div>
         </section>
       </div>
@@ -1373,7 +1689,7 @@ ${rows(records.prompts.filter((p) => p.inline), "No inline prompts detected.", (
 
 write("report.md", report);
 const trace = tracePayload(generatedAt);
-write("index.html", renderSimpleHtmlReport(trace, report));
+write("agent-report.html", renderSimpleHtmlReport(trace, report));
 write(
   "trace-map.json",
   JSON.stringify(trace, null, 2) + "\n",
@@ -1384,22 +1700,24 @@ if (nextPagePath) excludePatterns.push("app/agent-observe-skill/");
 const excludePath = addLocalGitExcludes(excludePatterns);
 
 console.log(`Agent Observe report written to ${outDir}`);
-console.log(`Open ${path.join(outDir, "report.md")}`);
-console.log(`Open ${path.join(outDir, "index.html")} for the visual report`);
+console.log(`Open ${path.join(outDir, "agent-report.html")} in your browser`);
 if (nextPagePath) console.log(`Next.js page written to ${nextPagePath}`);
 if (excludePath) console.log(`Generated artifacts are locally ignored via ${excludePath}`);
 NODE
   exit $?
 fi
 
-REPORT="$OUT_DIR/report.md"
-PROMPTS="$OUT_DIR/prompts.md"
-TOOLS="$OUT_DIR/tools.md"
-CHAINS="$OUT_DIR/chains.md"
-ROUTES="$OUT_DIR/routes.md"
-RISKS="$OUT_DIR/risks.md"
-TRACE="$OUT_DIR/trace-map.json"
-INDEX="$OUT_DIR/index.html"
+rm -f "$OUT_DIR/index.html" "$OUT_DIR/report.md" "$OUT_DIR/prompts.md" "$OUT_DIR/tools.md" "$OUT_DIR/chains.md" "$OUT_DIR/routes.md" "$OUT_DIR/risks.md" "$OUT_DIR/trace-map.json"
+BASH_REPORT_TMP="$(mktemp -d)"
+trap 'rm -rf "$BASH_REPORT_TMP"' EXIT
+REPORT="$BASH_REPORT_TMP/report.md"
+PROMPTS="$BASH_REPORT_TMP/prompts.md"
+TOOLS="$BASH_REPORT_TMP/tools.md"
+CHAINS="$BASH_REPORT_TMP/chains.md"
+ROUTES="$BASH_REPORT_TMP/routes.md"
+RISKS="$BASH_REPORT_TMP/risks.md"
+TRACE="$BASH_REPORT_TMP/trace-map.json"
+INDEX="$OUT_DIR/agent-report.html"
 
 if [ "$LIST_AGENTS" = "1" ]; then
   say "Detected agent candidates:"
@@ -1533,12 +1851,17 @@ cat > "$INDEX" <<HTML
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Agent Observe Report</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23101410'/%3E%3Cpath d='M16 32c5-9 11-13 16-13s11 4 16 13c-5 9-11 13-16 13s-11-4-16-13Z' fill='none' stroke='%23f4f7ef' stroke-width='5' stroke-linejoin='round'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%232f80ed'/%3E%3C/svg%3E" />
     <style>
       body { margin: 0; padding: 28px; background: #f6f7f3; color: #171a16; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       main { display: grid; gap: 18px; }
       section { border: 1px solid #d7ddd2; border-radius: 8px; background: #fff; padding: 18px; }
       h1 { margin: 0; font-size: clamp(34px, 6vw, 72px); line-height: .95; }
       pre { margin: 0; white-space: pre-wrap; overflow-x: auto; color: #edf3ea; background: #101410; border-radius: 8px; padding: 16px; }
+      .tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+      button { border: 1px solid #d7ddd2; border-radius: 8px; background: #fff; padding: 8px 12px; font: inherit; cursor: pointer; }
+      button.active { border-color: #2f80ed; color: #2f80ed; background: #edf5ff; }
+      [hidden] { display: none; }
     </style>
   </head>
   <body>
@@ -1546,13 +1869,31 @@ cat > "$INDEX" <<HTML
       <h1>Agent Observe Report</h1>
       <section>
         <p>Node was not available, so this visual report uses the Bash fallback output.</p>
-        <p>Open <code>report.md</code>, <code>prompts.md</code>, <code>tools.md</code>, <code>chains.md</code>, <code>routes.md</code>, and <code>risks.md</code> for details.</p>
+        <p>This file combines the static report and risks. Re-run on a machine with Node for richer agent flow details.</p>
       </section>
+      <nav class="tabs" aria-label="Report view">
+        <button type="button" class="active" data-tab="report">Report</button>
+        <button type="button" data-tab="risks">Risks</button>
+      </nav>
       <section>
-        <h2>Generated Report</h2>
+        <h2 id="report-heading">Generated Report</h2>
         <pre>$(sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' "$REPORT")</pre>
       </section>
+      <section hidden>
+        <h2>Risks</h2>
+        <pre>$(sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' "$RISKS")</pre>
+      </section>
     </main>
+    <script>
+      const buttons = document.querySelectorAll("[data-tab]");
+      const sections = Array.from(document.querySelectorAll("main > section")).slice(1);
+      buttons.forEach((button, index) => {
+        button.addEventListener("click", () => {
+          buttons.forEach((item) => item.classList.toggle("active", item === button));
+          sections.forEach((section, sectionIndex) => section.hidden = sectionIndex !== index);
+        });
+      });
+    </script>
   </body>
 </html>
 HTML
@@ -1560,6 +1901,5 @@ HTML
 add_local_git_exclude ".agent-observe-skill/"
 
 say "Agent Observe report written to $OUT_DIR"
-say "Open $REPORT"
-say "Open $INDEX for the visual report"
+say "Open $INDEX in your browser"
 [ -n "$GIT_EXCLUDE" ] && say "Generated artifacts are locally ignored via $GIT_EXCLUDE"

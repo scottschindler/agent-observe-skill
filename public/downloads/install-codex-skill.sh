@@ -20,4 +20,4 @@ cp -R "$tmpdir/agent-observe-skill/agent-observe-skill" "$target_dir"
 chmod +x "$target_dir/scripts/skill.sh"
 
 printf 'Installed Agent Observe Skill to %s\n' "$target_dir"
-printf 'Restart Codex from this repo, then ask: Use $agent-observe-skill to scan this repo.\n'
+printf 'Restart Codex from this repo, start a new thread, then ask: Use $agent-observe-skill to scan this repo.\n'

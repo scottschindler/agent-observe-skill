@@ -343,7 +343,7 @@ function inferAssignedName(text, index, fallback) {
 }
 
 function extractProperty(snippet, key) {
-  const pattern = new RegExp(`\\b${key}\\s*:\\s*([\\s\\S]{1,700})`);
+  const pattern = new RegExp(`(?:^|[^.\\w$])\\b${key}\\s*:\\s*([\\s\\S]{1,700})`);
   const match = snippet.match(pattern);
   if (!match) return "";
   const raw = match[1].trim();
@@ -432,7 +432,53 @@ function collectPromptBindings(text) {
   eachMatch(text, /(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*(?:Prompt|Instructions|Messages)[A-Za-z_$\w]*)\s*\(/gi, (m) => {
     if (builders.has(m[2])) bindings.set(m[1], builders.get(m[2]));
   });
+  eachMatch(text, /(?:export\s+)?(?:const|let|var)\s+(prompt|system|messages|[A-Za-z_$][\w$]*(?:Prompt|System|Messages|Instruction|Instructions)[A-Za-z_$\w]*)\s*=\s*([\s\S]{1,1200}?);/gi, (m) => {
+    if (bindings.has(m[1])) return;
+    const summary = summarizePromptReference(m[2]);
+    if (summary) bindings.set(m[1], summary);
+  });
   return bindings;
+}
+
+function normalizePromptReference(value) {
+  return clean(value)
+    .replace(/[!?]\./g, ".")
+    .replace(/\?\./g, ".")
+    .replace(/\[['"]([^'"]+)['"]\]/g, ".$1");
+}
+
+function promptReferences(value) {
+  const raw = String(value || "");
+  const refs = [];
+  const seen = new Set();
+  const push = (ref) => {
+    const normalized = normalizePromptReference(ref);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    refs.push(normalized);
+  };
+  eachMatch(raw, /\b[A-Za-z_$][\w$]*(?:[!?]?\.)+(?:prompt|system|messages|instructions|agentContext)\b/gi, (m) => {
+    push(m[0]);
+  });
+  if (!refs.length) {
+    eachMatch(raw, /\b[A-Za-z_$][\w$]*(?:Prompt|System|Messages|Instruction|Instructions)[A-Za-z_$\w]*\b/g, (m) => {
+      push(m[0]);
+    });
+  }
+  return refs;
+}
+
+function summarizePromptReference(value) {
+  const raw = String(value || "").trim();
+  if (!raw || /^[`"']/.test(raw)) return "";
+  const refs = promptReferences(raw);
+  if (refs.length) {
+    return `Prompt text is dynamic and was not statically resolved.\nReference: ${refs.join(", ")}`;
+  }
+  if (/^[A-Za-z_$][\w$]*(?:[.[\]]|\b)|\?/.test(raw)) {
+    return `Prompt text is dynamic and was not statically resolved.\nReference: ${cleanMultiline(raw)}`;
+  }
+  return "";
 }
 
 function resolvePromptText(value, bindings) {
@@ -443,6 +489,8 @@ function resolvePromptText(value, bindings) {
   if (contentRef && bindings.has(contentRef[1])) return bindings.get(contentRef[1]);
   const directRef = raw.match(/^[A-Za-z_$][\w$]*$/);
   if (directRef && bindings.has(directRef[0])) return bindings.get(directRef[0]);
+  const summary = summarizePromptReference(raw);
+  if (summary) return summary;
   return cleanMultiline(raw);
 }
 
@@ -666,19 +714,20 @@ for (const file of files) {
     });
   });
 
-  eachMatch(text, /\b(system|prompt|messages)\s*:\s*(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\[[\s\S]{0,700}?\]|[A-Za-z_$][\w$.[\]]*)/g, (m) => {
+  eachMatch(text, /(?:^|[^.\w$])\b(system|prompt|messages)\s*:\s*(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\[[\s\S]{0,700}?\]|[A-Za-z_$][\w$.[\]]*)/g, (m) => {
+    const key = m[1] || "";
     const value = m[2] || "";
     const lineTail = text.slice(m.index, text.indexOf("\n", m.index) === -1 ? text.length : text.indexOf("\n", m.index));
     if (/^(string|number|boolean|unknown|any|Date)$/.test(value) && /;\s*$/.test(lineTail)) return;
-    const inline = /^[`"']/.test(value) || (m[1] === "messages" && value.trim().startsWith("["));
+    const inline = /^[`"']/.test(value) || (key === "messages" && value.trim().startsWith("["));
     const promptLine = lineOf(text, m.index);
     const textValue = resolvePromptText(value, promptBindings);
     const prompt = {
-      id: id("prompt", file, promptLine, `${m[1]}:${records.prompts.length + 1}`),
+      id: id("prompt", file, promptLine, `${key}:${records.prompts.length + 1}`),
       file: relative,
       line: promptLine,
       agentId: registerAgent(fileAgent, file, promptLine, "prompt"),
-      kind: m[1],
+      kind: key,
       inline,
       valueType: inline ? "inline literal" : "reference",
       preview: preview(textValue || value, 180),
@@ -923,6 +972,15 @@ function matchRouteForEntry(entry, routes) {
   );
 }
 
+function promptStepTitle(prompt) {
+  const kind = prompt.kind === "system" ? "System instructions are added" : prompt.kind === "messages" ? "Conversation context is added" : "User instructions are added";
+  const name = clean(prompt.name || "");
+  if (name && name.toLowerCase() !== clean(prompt.kind).toLowerCase()) return `${kind} · ${name}`;
+  if (prompt.valueType === "reference") return `${kind} from a shared reference`;
+  if (prompt.valueType === "named constant") return `${kind} from a named prompt`;
+  return kind;
+}
+
 function buildAgentFlow(agentId) {
   const steps = [];
   const push = (step) => {
@@ -949,9 +1007,9 @@ function buildAgentFlow(agentId) {
         phase: "entry",
         kind: "entrypoints",
         id: entry.id,
-        title: `User entry · ${entry.hook}`,
-        subtitle: `${entry.file}:${entry.line} → ${entry.api}`,
-        note: "The user sends a message from the UI.",
+        title: "User sends a chat message",
+        subtitle: `${entry.hook} · ${entry.file}:${entry.line} -> ${entry.api}`,
+        note: "This is where a person starts the AI flow in the product.",
       });
     }
   }
@@ -963,9 +1021,9 @@ function buildAgentFlow(agentId) {
       phase: "route",
       kind: "routes",
       id: matchedRoute.id,
-      title: `API route · ${(matchedRoute.methods || []).join("/") || "handler"}`,
-      subtitle: matchedRoute.file,
-      note: "The HTTP request reaches your server route.",
+      title: "App sends the message to the backend",
+      subtitle: `${(matchedRoute.methods || []).join("/") || "handler"} · ${matchedRoute.file}`,
+      note: "The app hands the user's message to server-side code before the AI runs.",
     });
   } else if (routes.length && !entries.length) {
     for (const route of routes) {
@@ -973,9 +1031,9 @@ function buildAgentFlow(agentId) {
         phase: "route",
         kind: "routes",
         id: route.id,
-        title: `API entry · ${route.file}`,
-        subtitle: `AI: ${(route.aiPatterns || []).join(", ") || "none"}`,
-        note: "No client hook detected; request starts at the API route.",
+        title: "Backend endpoint starts the AI flow",
+        subtitle: `${route.file} · AI: ${(route.aiPatterns || []).join(", ") || "none"}`,
+        note: "No UI entry point was detected, so this flow starts from a backend endpoint.",
       });
     }
   }
@@ -990,28 +1048,26 @@ function buildAgentFlow(agentId) {
     for (const prompt of chainPrompts) {
       if (pushedPromptIds.has(prompt.id)) continue;
       pushedPromptIds.add(prompt.id);
-      const label = prompt.kind === "system" ? "System prompt" : `${prompt.kind} prompt`;
       push({
         phase: "prompt",
         kind: "prompts",
         id: prompt.id,
-        title: prompt.name ? `${label} · ${prompt.name}` : label,
+        title: promptStepTitle(prompt),
         subtitle: preview(prompt.text || prompt.preview, 100),
-        note: "Instructions are attached before the model runs.",
+        note: "These instructions shape how the AI should behave before it answers.",
       });
     }
     for (const prompt of prompts.filter(
       (item) => item.file === chain.file && item.line <= chain.line + 12 && !pushedPromptIds.has(item.id),
     )) {
       pushedPromptIds.add(prompt.id);
-      const label = prompt.kind === "system" ? "System prompt" : `${prompt.kind} prompt`;
       push({
         phase: "prompt",
         kind: "prompts",
         id: prompt.id,
-        title: prompt.name ? `${label} · ${prompt.name}` : label,
+        title: promptStepTitle(prompt),
         subtitle: preview(prompt.text || prompt.preview, 100),
-        note: "Instructions are attached before the model runs.",
+        note: "These instructions shape how the AI should behave before it answers.",
       });
     }
 
@@ -1019,9 +1075,9 @@ function buildAgentFlow(agentId) {
       phase: "model",
       kind: "chains",
       id: chain.id,
-      title: `Model call · ${chain.type}`,
-      subtitle: `${chain.model} · ${chain.file}:${chain.line}`,
-      note: "The LLM runs and may invoke tools in a loop (order varies at runtime).",
+      title: "AI generates a response",
+      subtitle: `${chain.type} · ${chain.model} · ${chain.file}:${chain.line}`,
+      note: "The model reads the message, instructions, and available tools, then produces the next response.",
     });
 
     const chainTools = (chain.toolIds || [])
@@ -1035,9 +1091,9 @@ function buildAgentFlow(agentId) {
         phase: "tool",
         kind: "tools",
         id: tool.id,
-        title: `Tool · ${tool.name}`,
-        subtitle: tool.schema || "read / lookup",
-        note: "Model may call this to fetch data (no side effects detected).",
+        title: "AI can look up information",
+        subtitle: `${tool.name} · ${tool.schema || "read / lookup"}`,
+        note: "The AI can call this helper to fetch information before answering.",
         nested: true,
       });
     }
@@ -1046,9 +1102,9 @@ function buildAgentFlow(agentId) {
         phase: "side-effect",
         kind: "tools",
         id: tool.id,
-        title: `External action · ${tool.name}`,
-        subtitle: `${tool.file}:${tool.line}`,
-        note: "Database, payment, email, or other mutation when the model invokes this tool.",
+        title: "AI can change something outside the chat",
+        subtitle: `${tool.name} · ${tool.file}:${tool.line}`,
+        note: "This helper can change external state, so it needs extra review, permissions, and logging.",
         nested: true,
       });
     }
@@ -1057,9 +1113,9 @@ function buildAgentFlow(agentId) {
       phase: "output",
       kind: "chains",
       id: `${chain.id}:output`,
-      title: "Response to client",
+      title: "User receives the answer",
       subtitle: inferChainOutput(chain),
-      note: "Final output leaves the server and returns to the entry point.",
+      note: "The result is sent back to the product experience for the user to see.",
     });
   }
 
@@ -1250,9 +1306,29 @@ function rows(items, empty, render) {
   return items.map(render).join("\n") + "\n";
 }
 
+const legacyOutputFiles = [
+  "index.html",
+  "report.md",
+  "prompts.md",
+  "tools.md",
+  "chains.md",
+  "routes.md",
+  "risks.md",
+  "trace-map.json",
+];
+
+function removeLegacyOutputs() {
+  for (const name of legacyOutputFiles) {
+    fs.rmSync(path.join(outDir, name), { force: true });
+  }
+}
+
 function write(name, body) {
+  if (legacyOutputFiles.includes(name) || name.endsWith(".md")) return;
   fs.writeFileSync(path.join(outDir, name), body);
 }
+
+removeLegacyOutputs();
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -1297,7 +1373,7 @@ function tracePayload(generatedAt) {
     },
     flows: buildAllFlows(),
     flowNote:
-      "Execution order is inferred from static code structure. Tool call order during a model loop may differ at runtime.",
+      "This is the likely product journey from user action to AI response. It is inferred from static code, so runtime tool order may differ.",
     ...records,
   };
 }
@@ -1319,6 +1395,7 @@ function renderSimpleHtmlReport(trace, report) {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Observe Report</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23101410'/%3E%3Cpath d='M16 32c5-9 11-13 16-13s11 4 16 13c-5 9-11 13-16 13s-11-4-16-13Z' fill='none' stroke='%23f4f7ef' stroke-width='5' stroke-linejoin='round'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%232f80ed'/%3E%3C/svg%3E" />
     <meta name="description" content="Local Agent Observe scan results for prompts, tools, model calls, routes, and risks." />
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -1362,12 +1439,18 @@ function renderSimpleHtmlReport(trace, report) {
     <main class="flex-grow w-full max-w-6xl mx-auto px-6 pt-10 pb-16 relative z-10 space-y-4">
       <div>
         <div class="flex flex-wrap gap-2 mb-3" id="agents" aria-label="Select agent"></div>
-        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900">Results</h1>
+        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900" id="agent-name">Results</h1>
+        <p class="mt-1 max-w-3xl text-[15px] leading-relaxed text-gray-600" id="agent-description"></p>
         <p class="mt-1 text-[13px] text-gray-500">Scope: <span class="font-medium text-gray-900">${selectionLabel}</span> · ${generatedAt}</p>
       </div>
       <section class="p-4 sm:p-5 rounded-2xl border border-gray-200 bg-white shadow-sm" aria-label="Agent execution flow">
-        <p class="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Execution flow</p>
-        <p class="text-[12px] text-gray-500 mb-4 leading-relaxed" id="flow-note"></p>
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p class="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1" id="section-kicker">User journey</p>
+            <p class="text-[12px] text-gray-500 leading-relaxed" id="flow-note"></p>
+          </div>
+          <div class="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1" id="view-tabs" aria-label="Report view"></div>
+        </div>
         <div class="grid lg:grid-cols-[minmax(300px,1fr)_minmax(300px,1fr)] gap-8 lg:gap-10 items-start">
           <div class="max-h-[min(72vh,720px)] overflow-y-auto pr-2 -mr-2" id="flow-timeline"></div>
           <div class="lg:sticky lg:top-6">
@@ -1407,19 +1490,23 @@ import { useMemo, useState } from "react";
 const data = ${JSON.stringify(data, null, 2)} as any;
 
 const colors = { bg: "#f7f8f5", panel: "#fff", ink: "#171a16", muted: "#637063", line: "#d7ddd2", blue: "#2f80ed" };
-const kinds = [["entrypoints", "Entry points"], ["tools", "Tool calls"], ["prompts", "Prompts"], ["chains", "Model calls"], ["routes", "Routes"], ["risks", "Risks"]] as const;
+const reportKinds = [["entrypoints", "Entry points"], ["tools", "Tool calls"], ["prompts", "Prompts"], ["chains", "Model calls"], ["routes", "Routes"]] as const;
+const riskKinds = [["risks", "Risks"]] as const;
 
 export default function AgentObserveSkillPage() {
   const [agentId, setAgentId] = useState<string>(data.agents[0]?.id || "");
+  const [view, setView] = useState<string>("report");
   const [kind, setKind] = useState<string>("entrypoints");
   const agent = data.agents.find((item: any) => item.id === agentId);
   const byAgent = (items: any[]) => (items || []).filter((item: any) => item.agentId === agentId);
+  const kinds = view === "risks" ? riskKinds : reportKinds;
+  const promptTitle = (prompt: any) => prompt.kind === "system" ? "System instructions are added" : prompt.kind === "messages" ? "Conversation context is added" : prompt.valueType === "reference" ? "User instructions are added from a shared reference" : prompt.valueType === "named constant" ? "User instructions are added from a named prompt" : "User instructions are added";
   const rows = useMemo(() => {
-    if (kind === "entrypoints") return byAgent(data.uiEntrypoints).map((entry: any) => ({ meta: "UI entry", title: entry.hook, code: entry.file + ":" + entry.line + " · API: " + entry.api }));
-    if (kind === "tools") return byAgent(data.tools).map((tool: any) => ({ meta: tool.sideEffect ? "side-effect tool" : "tool", title: tool.name, code: "Description: " + tool.description + "\\nSchema: " + tool.schema + "\\nExecute handler: " + (tool.hasExecute ? "yes" : "no") + "\\nSide effects: " + (tool.sideEffect ? "yes" : "no") + "\\nSource: " + tool.file + ":" + tool.line + "\\nEvidence: " + tool.evidence }));
-    if (kind === "prompts") return byAgent(data.prompts).map((prompt: any) => ({ meta: prompt.kind, title: prompt.name || prompt.valueType || "Prompt", code: "Source: " + prompt.file + ":" + prompt.line + "\\nValue type: " + prompt.valueType + "\\nPrompt text:\\n" + (prompt.text || prompt.preview || "No prompt text resolved") }));
-    if (kind === "chains") return byAgent(data.chains).map((chain: any) => ({ meta: chain.type, title: chain.model, code: chain.file + ":" + chain.line + " · tools: " + ((chain.tools || []).join(", ") || "none") }));
-    if (kind === "routes") return byAgent(data.routes).map((route: any) => ({ meta: route.kind, title: route.file, code: "methods: " + ((route.methods || []).join(", ") || "unknown") + " · AI: " + ((route.aiPatterns || []).join(", ") || "none") }));
+    if (kind === "entrypoints") return byAgent(data.uiEntrypoints).map((entry: any) => ({ meta: "User entry", title: "User sends a chat message", code: "What this means: this is where someone starts the AI experience.\\nHow the user starts this: " + entry.hook + "\\nWhere the message is sent: " + entry.api + "\\nCode: " + entry.file + ":" + entry.line }));
+    if (kind === "tools") return byAgent(data.tools).map((tool: any) => ({ meta: tool.sideEffect ? "Action" : "Lookup", title: tool.sideEffect ? "AI can change something outside the chat" : "AI can look up information", code: "What this means: " + (tool.sideEffect ? "the AI can call this helper to change product state, so permissions and logging matter." : "the AI can call this helper to fetch information before answering.") + "\\nTool name: " + tool.name + "\\nDescription: " + tool.description + "\\nInput data: " + tool.schema + "\\nCode: " + tool.file + ":" + tool.line }));
+    if (kind === "prompts") return byAgent(data.prompts).map((prompt: any) => ({ meta: prompt.kind, title: promptTitle(prompt), code: "What this means: these instructions shape how the AI behaves before it answers.\\nSource: " + prompt.file + ":" + prompt.line + "\\nValue source: " + prompt.valueType + "\\nPrompt text:\\n" + (prompt.text || prompt.preview || "No prompt text resolved") }));
+    if (kind === "chains") return byAgent(data.chains).map((chain: any) => ({ meta: chain.type, title: "AI generates a response", code: "What this means: the app asks an AI model to produce the next response.\\nModel: " + chain.model + "\\nTools available: " + ((chain.tools || []).join(", ") || "none") + "\\nCode: " + chain.file + ":" + chain.line }));
+    if (kind === "routes") return byAgent(data.routes).map((route: any) => ({ meta: route.kind, title: "App sends the message to the backend", code: "What this means: this endpoint receives the user's request and prepares the AI work.\\nMethods: " + ((route.methods || []).join(", ") || "unknown") + "\\nAI code found: " + ((route.aiPatterns || []).join(", ") || "none") + "\\nCode: " + route.file }));
     return byAgent(data.risks).map((risk: any) => ({ meta: risk.severity + " / " + risk.kind, title: risk.message, code: risk.file + ":" + risk.line }));
   }, [agentId, kind]);
   const count = (item: string) => item === "entrypoints" ? byAgent(data.uiEntrypoints).length : (item === "routes" ? byAgent(data.routes).length : item === "tools" ? byAgent(data.tools).length : item === "prompts" ? byAgent(data.prompts).length : item === "chains" ? byAgent(data.chains).length : byAgent(data.risks).length);
@@ -1433,7 +1520,7 @@ export default function AgentObserveSkillPage() {
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center" }}>{data.agents.map((item: any) => <button key={item.id} type="button" onClick={() => setAgentId(item.id)} style={{ minWidth: 150, border: "2px solid " + (item.id === agentId ? colors.blue : "#1f271d"), borderRadius: 8, background: "#fff", color: item.id === agentId ? colors.blue : colors.ink, padding: "16px 18px", cursor: "pointer", font: "inherit", fontWeight: 760 }}>{item.name}</button>)}</div>
         </section>
         <section style={{ border: "1px solid " + colors.line, borderRadius: 8, background: colors.panel, padding: 18, display: "grid", gridTemplateColumns: "minmax(260px, .95fr) minmax(300px, 1.05fr)", gap: 28 }}>
-          <div><h2 style={{ color: colors.blue, textAlign: "center", fontSize: 30, margin: "0 0 10px" }}>{agent?.name || "No agent selected"}</h2><p style={{ maxWidth: 620, margin: "0 auto 22px", color: colors.muted, textAlign: "center", fontSize: 14, lineHeight: 1.45 }}>{agent?.description || "Select an agent to see its inferred purpose from static evidence."}</p><div style={{ display: "grid", gap: 12 }}>{kinds.map(([item, label]) => <button key={item} type="button" onClick={() => setKind(item)} style={{ width: "100%", border: "2px solid " + (item === kind ? colors.blue : "#1f271d"), borderRadius: 7, background: "#fff", color: item === kind ? colors.blue : colors.ink, padding: 18, cursor: "pointer", font: "inherit", fontWeight: 760 }}>{label}<small style={{ display: "block", marginTop: 4, color: colors.muted, fontWeight: 500 }}>{count(item)} detected</small></button>)}</div></div>
+          <div><h2 style={{ color: colors.blue, textAlign: "center", fontSize: 30, margin: "0 0 10px" }}>{agent?.name || "No agent selected"}</h2><p style={{ maxWidth: 620, margin: "0 auto 22px", color: colors.muted, textAlign: "center", fontSize: 14, lineHeight: 1.45 }}>{agent?.description || "Select an agent to see its inferred purpose from static evidence."}</p><div style={{ display: "inline-flex", gap: 6, border: "1px solid " + colors.line, borderRadius: 8, padding: 4, marginBottom: 14 }}><button type="button" onClick={() => { setView("report"); setKind("entrypoints"); }} style={{ border: 0, borderRadius: 6, background: view === "report" ? colors.blue : "#fff", color: view === "report" ? "#fff" : colors.muted, padding: "8px 12px", cursor: "pointer", font: "inherit", fontWeight: 700 }}>Report</button><button type="button" onClick={() => { setView("risks"); setKind("risks"); }} style={{ border: 0, borderRadius: 6, background: view === "risks" ? colors.blue : "#fff", color: view === "risks" ? "#fff" : colors.muted, padding: "8px 12px", cursor: "pointer", font: "inherit", fontWeight: 700 }}>Risks</button></div><div style={{ display: "grid", gap: 12 }}>{kinds.map(([item, label]) => <button key={item} type="button" onClick={() => setKind(item)} style={{ width: "100%", border: "2px solid " + (item === kind ? colors.blue : "#1f271d"), borderRadius: 7, background: "#fff", color: item === kind ? colors.blue : colors.ink, padding: 18, cursor: "pointer", font: "inherit", fontWeight: 760 }}>{label}<small style={{ display: "block", marginTop: 4, color: colors.muted, fontWeight: 500 }}>{count(item)} detected</small></button>)}</div></div>
           <div><div style={{ textAlign: "center", marginBottom: 12, fontWeight: 760 }}>{activeLabel} info</div><div style={{ minHeight: 260, border: "2px solid " + colors.blue, borderRadius: 7, background: "#fff", padding: 18, display: "grid", gap: 12, alignContent: "start" }}>{rows.length ? rows.map((row: any, index: number) => <div key={index} style={{ borderTop: index ? "1px solid " + colors.line : 0, paddingTop: index ? 10 : 0 }}><span style={{ display: "block", color: colors.muted, fontSize: 11, letterSpacing: ".08em", textTransform: "uppercase" }}>{row.meta}</span><strong style={{ display: "block", marginTop: 5 }}>{row.title}</strong><code style={{ display: "block", marginTop: 6, color: colors.muted, fontSize: 12, overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{row.code}</code></div>) : <p style={{ color: colors.muted }}>No {activeLabel.toLowerCase()} detected for this agent.</p>}</div></div>
         </section>
       </div>
@@ -1608,7 +1695,7 @@ ${rows(records.prompts.filter((p) => p.inline), "No inline prompts detected.", (
 
 write("report.md", report);
 const trace = tracePayload(generatedAt);
-write("index.html", renderSimpleHtmlReport(trace, report));
+write("agent-report.html", renderSimpleHtmlReport(trace, report));
 write(
   "trace-map.json",
   JSON.stringify(trace, null, 2) + "\n",
@@ -1619,22 +1706,24 @@ if (nextPagePath) excludePatterns.push("app/agent-observe-skill/");
 const excludePath = addLocalGitExcludes(excludePatterns);
 
 console.log(`Agent Observe report written to ${outDir}`);
-console.log(`Open ${path.join(outDir, "report.md")}`);
-console.log(`Open ${path.join(outDir, "index.html")} for the visual report`);
+console.log(`Open ${path.join(outDir, "agent-report.html")} in your browser`);
 if (nextPagePath) console.log(`Next.js page written to ${nextPagePath}`);
 if (excludePath) console.log(`Generated artifacts are locally ignored via ${excludePath}`);
 NODE
   exit $?
 fi
 
-REPORT="$OUT_DIR/report.md"
-PROMPTS="$OUT_DIR/prompts.md"
-TOOLS="$OUT_DIR/tools.md"
-CHAINS="$OUT_DIR/chains.md"
-ROUTES="$OUT_DIR/routes.md"
-RISKS="$OUT_DIR/risks.md"
-TRACE="$OUT_DIR/trace-map.json"
-INDEX="$OUT_DIR/index.html"
+rm -f "$OUT_DIR/index.html" "$OUT_DIR/report.md" "$OUT_DIR/prompts.md" "$OUT_DIR/tools.md" "$OUT_DIR/chains.md" "$OUT_DIR/routes.md" "$OUT_DIR/risks.md" "$OUT_DIR/trace-map.json"
+BASH_REPORT_TMP="$(mktemp -d)"
+trap 'rm -rf "$BASH_REPORT_TMP"' EXIT
+REPORT="$BASH_REPORT_TMP/report.md"
+PROMPTS="$BASH_REPORT_TMP/prompts.md"
+TOOLS="$BASH_REPORT_TMP/tools.md"
+CHAINS="$BASH_REPORT_TMP/chains.md"
+ROUTES="$BASH_REPORT_TMP/routes.md"
+RISKS="$BASH_REPORT_TMP/risks.md"
+TRACE="$BASH_REPORT_TMP/trace-map.json"
+INDEX="$OUT_DIR/agent-report.html"
 
 if [ "$LIST_AGENTS" = "1" ]; then
   say "Detected agent candidates:"
@@ -1768,12 +1857,17 @@ cat > "$INDEX" <<HTML
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Agent Observe Report</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23101410'/%3E%3Cpath d='M16 32c5-9 11-13 16-13s11 4 16 13c-5 9-11 13-16 13s-11-4-16-13Z' fill='none' stroke='%23f4f7ef' stroke-width='5' stroke-linejoin='round'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%232f80ed'/%3E%3C/svg%3E" />
     <style>
       body { margin: 0; padding: 28px; background: #f6f7f3; color: #171a16; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       main { display: grid; gap: 18px; }
       section { border: 1px solid #d7ddd2; border-radius: 8px; background: #fff; padding: 18px; }
       h1 { margin: 0; font-size: clamp(34px, 6vw, 72px); line-height: .95; }
       pre { margin: 0; white-space: pre-wrap; overflow-x: auto; color: #edf3ea; background: #101410; border-radius: 8px; padding: 16px; }
+      .tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+      button { border: 1px solid #d7ddd2; border-radius: 8px; background: #fff; padding: 8px 12px; font: inherit; cursor: pointer; }
+      button.active { border-color: #2f80ed; color: #2f80ed; background: #edf5ff; }
+      [hidden] { display: none; }
     </style>
   </head>
   <body>
@@ -1781,13 +1875,31 @@ cat > "$INDEX" <<HTML
       <h1>Agent Observe Report</h1>
       <section>
         <p>Node was not available, so this visual report uses the Bash fallback output.</p>
-        <p>Open <code>report.md</code>, <code>prompts.md</code>, <code>tools.md</code>, <code>chains.md</code>, <code>routes.md</code>, and <code>risks.md</code> for details.</p>
+        <p>This file combines the static report and risks. Re-run on a machine with Node for richer agent flow details.</p>
       </section>
+      <nav class="tabs" aria-label="Report view">
+        <button type="button" class="active" data-tab="report">Report</button>
+        <button type="button" data-tab="risks">Risks</button>
+      </nav>
       <section>
-        <h2>Generated Report</h2>
+        <h2 id="report-heading">Generated Report</h2>
         <pre>$(sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' "$REPORT")</pre>
       </section>
+      <section hidden>
+        <h2>Risks</h2>
+        <pre>$(sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' "$RISKS")</pre>
+      </section>
     </main>
+    <script>
+      const buttons = document.querySelectorAll("[data-tab]");
+      const sections = Array.from(document.querySelectorAll("main > section")).slice(1);
+      buttons.forEach((button, index) => {
+        button.addEventListener("click", () => {
+          buttons.forEach((item) => item.classList.toggle("active", item === button));
+          sections.forEach((section, sectionIndex) => section.hidden = sectionIndex !== index);
+        });
+      });
+    </script>
   </body>
 </html>
 HTML
@@ -1795,6 +1907,5 @@ HTML
 add_local_git_exclude ".agent-observe-skill/"
 
 say "Agent Observe report written to $OUT_DIR"
-say "Open $REPORT"
-say "Open $INDEX for the visual report"
+say "Open $INDEX in your browser"
 [ -n "$GIT_EXCLUDE" ] && say "Generated artifacts are locally ignored via $GIT_EXCLUDE"

@@ -14,7 +14,7 @@ From the root of the repo you want to scan:
 curl -fsSL https://raw.githubusercontent.com/scottschindler/agent-observe-skill/main/public/downloads/install-codex-skill.sh | bash
 ```
 
-Restart Codex from that repo, then invoke:
+Restart Codex from that repo, start a new thread, then invoke:
 
 ```text
 Use $agent-observe-skill to scan this repo for prompts, tools, model calls, entry points, routes, eval gaps, and trace risks.
@@ -43,7 +43,7 @@ Add the Agent Observe plugin marketplace:
 codex plugin marketplace add scottschindler/agent-observe-skill --sparse .agents/plugins
 ```
 
-This only adds the marketplace catalog. To make `$agent-observe-skill` appear in Codex, restart Codex, open the Plugin Directory, choose **Agent Observe**, and install **Agent Observe Skill**.
+This only adds the marketplace catalog. To make `$agent-observe-skill` appear in Codex, restart Codex, open the Plugin Directory, choose **Agent Observe**, install **Agent Observe Skill**, then start a new thread. Resumed threads keep the skill list they had when they were created.
 
 After installing the plugin, invoke:
 
@@ -77,21 +77,14 @@ The scanner creates a local output folder in the target repo:
 
 ```text
 .agent-observe-skill/
-├── index.html
-├── report.md
-├── prompts.md
-├── tools.md
-├── chains.md
-├── routes.md
-├── risks.md
-└── trace-map.json
+└── agent-report.html
 ```
 
-Start with `index.html` for the visual report or `report.md` for the Markdown summary. The visual report includes overall counts, agent selection, and per-agent detail views for entry points, tool calls, prompts, model calls, routes, and risks. Use `trace-map.json` for structured follow-up analysis or visualizations. These generated files are added to `.git/info/exclude` so they stay out of ordinary commits.
+Open `agent-report.html` in your browser. It combines the report and risks in one local HTML file with a Report/Risks toggle, agent selection, inferred agent descriptions, and per-agent detail views for entry points, tool calls, prompts, model calls, routes, and risks. The scanner removes older generated Markdown and JSON artifacts from previous runs. Generated files are added to `.git/info/exclude` so they stay out of ordinary commits.
 
 ## What Gets Installed
 
-The installed skill is limited to `SKILL.md`, `agents/openai.yaml`, and `scripts/skill.sh`. Demo files and README images stay outside the skill folder.
+The installed skill is limited to `SKILL.md`, `agents/openai.yaml`, `scripts/skill.sh`, and `scripts/_report-ui-script.js`. Demo files and README images stay outside the skill folder.
 
 ## What It Detects
 
@@ -135,13 +128,13 @@ The generated report answers:
 
 ## How It Works
 
-`scripts/skill.sh` is portable Bash. When Node is available, it runs an embedded Node scanner for richer static analysis and JSON output. When Node is not available, it falls back to Bash and grep-based detection while still producing the same output files.
+`scripts/skill.sh` is portable Bash. When Node is available, it runs an embedded Node scanner for richer static analysis and the visual HTML report. When Node is not available, it falls back to Bash and grep-based detection while still producing `agent-report.html`.
 
 The scanner ignores common generated or dependency folders such as `.git`, `node_modules`, `.next`, `dist`, `build`, `coverage`, and `.agent-observe-skill`.
 
 ## Privacy
 
-The scanner reads local files and writes local Markdown and JSON. It does not upload source code, call a remote API, or require credentials.
+The scanner reads local files and writes a local HTML report. It does not upload source code, call a remote API, or require credentials.
 
 ## Demo Page
 
@@ -156,7 +149,8 @@ Its source is `demo/index.html`. It includes:
 - A download button for `skill.sh`
 - Overall counts
 - Agent selection
-- Per-agent detail buttons for entry points, tool calls, prompts, model calls, routes, and risks
+- A Report/Risks toggle
+- Per-agent detail views for entry points, tool calls, prompts, model calls, routes, and risks
 - A focused detail panel
 
 To preview it locally, serve the repo with any static file server and open `demo/`.

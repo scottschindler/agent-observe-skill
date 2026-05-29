@@ -1,12 +1,12 @@
 // Embedded into renderSimpleHtmlReport — client-side only (no Node).
 const PHASE_META = {
-  entry: { label: "Entry", tone: "info" },
-  route: { label: "Route", tone: "info" },
-  prompt: { label: "Prompt", tone: "low" },
-  model: { label: "Model", tone: "info" },
-  tool: { label: "Tool", tone: "ok" },
+  entry: { label: "Start", tone: "info" },
+  route: { label: "Backend", tone: "info" },
+  prompt: { label: "Instructions", tone: "low" },
+  model: { label: "AI response", tone: "info" },
+  tool: { label: "Lookup", tone: "ok" },
   "side-effect": { label: "Action", tone: "high" },
-  output: { label: "Output", tone: "ok" },
+  output: { label: "Answer", tone: "ok" },
   empty: { label: "—", tone: "low" },
 };
 
@@ -14,6 +14,7 @@ const state = {
   agentId: (trace.agents || [])[0]?.id || "",
   selectedId: "",
   kind: "",
+  view: "report",
 };
 
 const escapeHtml = (value) =>
@@ -24,12 +25,34 @@ const escapeHtml = (value) =>
 const byAgent = (items) => (items || []).filter((item) => item.agentId === state.agentId);
 const currentAgent = () => (trace.agents || []).find((agent) => agent.id === state.agentId) || null;
 
+function promptTitle(item, fallback) {
+  if (!item) return fallback || "Prompt";
+  const kind = item.kind === "system" ? "System instructions are added" : item.kind === "messages" ? "Conversation context is added" : "User instructions are added";
+  const name = String(item.name || "").trim();
+  if (name && name.toLowerCase() !== String(item.kind || "").toLowerCase()) return kind + " · " + name;
+  if (item.valueType === "reference") return kind + " from a shared reference";
+  if (item.valueType === "named constant") return kind + " from a named prompt";
+  return kind;
+}
+
+function displayStepTitle(step) {
+  if (!step) return "";
+  return step.title || "";
+}
+
 function agentButtonClass(active) {
   return [
     "rounded-lg border px-3 py-1.5 text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-gray-200 whitespace-nowrap",
     active
       ? "border-blue-600 text-blue-600 bg-blue-50"
       : "border-gray-200 text-gray-700 bg-white hover:border-gray-300 hover:bg-gray-50",
+  ].join(" ");
+}
+
+function viewButtonClass(active) {
+  return [
+    "rounded-md px-3 py-1.5 text-xs font-semibold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200",
+    active ? "bg-white text-blue-700 shadow-sm" : "text-gray-500 hover:text-gray-900",
   ].join(" ");
 }
 
@@ -122,6 +145,35 @@ function section(title, body) {
   );
 }
 
+function paragraph(text, tone) {
+  return '<p class="leading-relaxed ' + (tone || "text-gray-800") + '">' + escapeHtml(text) + "</p>";
+}
+
+function codeValue(value) {
+  return '<code class="font-mono text-sm text-gray-700 break-words">' + escapeHtml(value || "—") + "</code>";
+}
+
+function detailList(items) {
+  return (
+    '<dl class="grid gap-2 text-sm">' +
+    items
+      .map(function (item) {
+        return (
+          '<div class="grid gap-1 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-3">' +
+          '<dt class="text-xs font-semibold uppercase tracking-wide text-gray-400">' +
+          escapeHtml(item[0]) +
+          "</dt>" +
+          '<dd class="min-w-0 text-gray-800">' +
+          item[1] +
+          "</dd>" +
+          "</div>"
+        );
+      })
+      .join("") +
+    "</dl>"
+  );
+}
+
 function preBlock(text) {
   return (
     '<pre class="mt-2 max-h-64 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-gray-800 whitespace-pre-wrap break-words">' +
@@ -159,19 +211,42 @@ function renderOutputDetail(step, chain) {
     '<h2 class="text-lg font-semibold text-gray-900">' +
     escapeHtml(step.title) +
     "</h2>" +
-    '<p class="text-[15px] text-gray-700">' +
-    escapeHtml(step.subtitle) +
-    "</p>" +
-    '<p class="text-sm text-gray-500">' +
-    escapeHtml(step.note) +
-    "</p>" +
+    section("What this means", paragraph(step.note || "The product shows the AI response to the user.")) +
     (chain
-      ? section("Source", preBlock(chain.snippet)) +
+      ? section(
+          "Code details",
+          detailList([
+            ["Output", codeValue(step.subtitle)],
+            ["Model call", codeValue(chain.type || "model call")],
+          ]),
+        ) +
         locBar(chain) +
         '<p class="text-xs text-gray-400 mt-2">In the UI, streamed tokens appear in the chat component; non-stream responses render as a single message or JSON payload.</p>'
       : "") +
     "</div>"
   );
+}
+
+function productMeaning(kind, item, step) {
+  if (kind === "entrypoints") {
+    return "This is the product moment where a user starts the AI experience, usually by sending a message or prompt.";
+  }
+  if (kind === "routes") {
+    return "This backend endpoint receives the user's request and prepares the AI work.";
+  }
+  if (kind === "prompts") {
+    return "These instructions shape how the AI should behave before it answers the user.";
+  }
+  if (kind === "chains") {
+    return "This is where the app asks an AI model to generate the next response.";
+  }
+  if (kind === "tools" && item && item.sideEffect) {
+    return "The AI can call this helper to change something outside the chat, such as a database, payment, email, or another service.";
+  }
+  if (kind === "tools") {
+    return "The AI can call this helper to look up information before it answers.";
+  }
+  return step && step.note ? step.note : "This is one step in the AI flow.";
 }
 
 function renderDetail(item, kind, step) {
@@ -199,7 +274,15 @@ function renderDetail(item, kind, step) {
   let body = "";
   if (kind === "prompts") {
     body =
-      section("Prompt text", preBlock(item.text || item.preview)) + section("Source context", preBlock(item.snippet));
+      section("What this means", paragraph(productMeaning(kind, item, step))) +
+      section("Prompt text", preBlock(item.text || item.preview || "No prompt text resolved")) +
+      section(
+        "Code details",
+        detailList([
+          ["Prompt type", codeValue(item.kind)],
+          ["Value source", codeValue(item.valueType)],
+        ]),
+      );
   } else if (kind === "tools") {
     const schemaRows = (item.schemaFields || [])
       .map(
@@ -212,47 +295,128 @@ function renderDetail(item, kind, step) {
       )
       .join("");
     body =
+      section("What this means", paragraph(productMeaning(kind, item, step))) +
       (item.sideEffect
-        ? '<p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">Mutates external state when the model invokes this tool.</p>'
+        ? '<p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">This can change real product state. Review permissions, logging, and tests before trusting model-triggered calls.</p>'
         : "") +
-      section("Description", escapeHtml(item.descriptionFull || item.description || "—")) +
       section(
-        "Input schema",
+        "Code details",
+        detailList([
+          ["Tool name", codeValue(item.name)],
+          ["Description", escapeHtml(item.descriptionFull || item.description || "—")],
+          ["Can change state", codeValue(item.sideEffect ? "yes" : "no")],
+        ]),
+      ) +
+      section(
+        "Input data this tool expects",
         schemaRows
           ? '<table class="w-full text-left"><thead><tr><th class="pb-2 text-xs text-gray-500">Field</th><th class="pb-2 text-xs text-gray-500">Type</th></tr></thead><tbody>' +
             schemaRows +
             "</tbody></table>"
           : '<p class="text-gray-500 text-sm">' + escapeHtml(item.schema || "No schema") + "</p>",
-      ) +
-      section("Source context", preBlock(item.snippet));
+      );
   } else if (kind === "chains") {
     body =
-      section("Model", escapeHtml(item.modelFull || item.model)) +
-      section("Prompts", escapeHtml((item.prompts || []).join("; ") || "—")) +
-      section("Tools", escapeHtml((item.tools || []).join(", ") || "—")) +
-      section("Source context", preBlock(item.snippet));
+      section("What this means", paragraph(productMeaning(kind, item, step))) +
+      section(
+        "Code details",
+        detailList([
+          ["Model", codeValue(item.modelFull || item.model)],
+          ["Prompt inputs", escapeHtml((item.prompts || []).join("; ") || "—")],
+          ["Tools available", escapeHtml((item.tools || []).join(", ") || "—")],
+        ]),
+      );
   } else if (kind === "routes") {
     body =
-      section("Methods", escapeHtml((item.methods || []).join(", ") || "unknown")) +
-      section("AI patterns", escapeHtml((item.aiPatterns || []).join(", ") || "none")) +
-      section("Source context", preBlock(item.snippet));
+      section("What this means", paragraph(productMeaning(kind, item, step))) +
+      section(
+        "Code details",
+        detailList([
+          ["HTTP methods", codeValue((item.methods || []).join(", ") || "unknown")],
+          ["AI code found", codeValue((item.aiPatterns || []).join(", ") || "none")],
+        ]),
+      );
   } else if (kind === "entrypoints") {
     body =
-      section("Hook", escapeHtml(item.hook)) +
-      section("API target", escapeHtml(item.api)) +
-      section("Source context", preBlock(item.snippet));
+      section("What this means", paragraph(productMeaning(kind, item, step))) +
+      section("How the user starts this", codeValue(item.hook)) +
+      section("Where the message is sent", codeValue(item.api));
   }
 
   return (
     '<div class="grid gap-4">' +
     '<div class="flex flex-wrap items-start gap-2"><h2 class="text-lg font-semibold text-gray-900 flex-1">' +
-    escapeHtml(step ? step.title : item.name || item.hook) +
+    escapeHtml(step ? displayStepTitle(step) : kind === "prompts" ? promptTitle(item, "") : item.name || item.hook) +
     "</h2>" +
     (badges.length ? '<div class="flex flex-wrap gap-1">' + badges.join("") + "</div>" : "") +
     "</div>" +
-    (step && step.note ? '<p class="text-sm text-gray-500">' + escapeHtml(step.note) + "</p>" : "") +
-    locBar(item) +
     body +
+    locBar(item) +
+    "</div>"
+  );
+}
+
+function riskTone(severity) {
+  if (severity === "high") return "high";
+  if (severity === "medium") return "medium";
+  return "low";
+}
+
+function renderRiskTimeline(risks) {
+  if (!risks.length) {
+    return '<p class="text-sm text-gray-500">No risks detected for this agent.</p>';
+  }
+  return (
+    '<ol class="grid gap-3 list-none m-0 p-0">' +
+    risks
+      .map(function (risk, index) {
+        const active = state.selectedId === risk.id;
+        return (
+          '<li><button type="button" class="' +
+          flowCardClass(active, false) +
+          '" data-risk-id="' +
+          escapeHtml(risk.id) +
+          '">' +
+          '<div class="flex gap-3 px-3.5 py-3">' +
+          '<div class="w-1 shrink-0 rounded-full ' +
+          (risk.severity === "high" ? "bg-red-500" : risk.severity === "medium" ? "bg-amber-500" : "bg-gray-400") +
+          '" aria-hidden="true"></div>' +
+          '<div class="min-w-0 flex-1">' +
+          '<div class="flex flex-wrap items-center gap-2">' +
+          '<span class="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">Risk ' +
+          escapeHtml(String(index + 1)) +
+          "</span>" +
+          badge(risk.severity || "risk", riskTone(risk.severity)) +
+          "</div>" +
+          '<div class="mt-1 text-[15px] font-medium leading-snug text-gray-900">' +
+          escapeHtml(risk.message || "Risk") +
+          "</div>" +
+          '<div class="mt-1 font-mono text-[12px] leading-relaxed text-gray-500 break-all">' +
+          escapeHtml((risk.kind || "risk") + " · " + risk.file + ":" + risk.line) +
+          "</div>" +
+          "</div></div></button></li>"
+        );
+      })
+      .join("") +
+    "</ol>"
+  );
+}
+
+function renderRiskDetail(risk) {
+  if (!risk) return '<p class="text-[15px] text-gray-500">Select a risk to inspect it.</p>';
+  return (
+    '<div class="grid gap-4">' +
+    '<div class="flex flex-wrap items-start gap-2"><h2 class="text-lg font-semibold text-gray-900 flex-1">' +
+    escapeHtml(risk.message || "Risk") +
+    "</h2>" +
+    '<div class="flex flex-wrap gap-1">' +
+    badge(risk.severity || "risk", riskTone(risk.severity)) +
+    badge(risk.kind || "risk", "low") +
+    "</div></div>" +
+    locBar(risk) +
+    section("Why this was flagged", preBlock(risk.evidenceFull || risk.evidence || "No evidence captured")) +
+    section("Recommended next step", '<p class="text-[15px] leading-relaxed text-gray-800">' + escapeHtml(risk.fix || "Review this risk in the referenced code path.") + "</p>") +
+    (risk.targetId ? section("Code target", '<code class="font-mono text-xs text-gray-600">' + escapeHtml(risk.targetId) + "</code>") : "") +
     "</div>"
   );
 }
@@ -297,7 +461,7 @@ function renderFlowTimeline(steps) {
           escapeHtml(meta.label) +
           "</div>" +
           '<div class="mt-1 text-[15px] font-medium leading-snug text-gray-900">' +
-          escapeHtml(step.title) +
+          escapeHtml(displayStepTitle(step)) +
           "</div>" +
           '<div class="mt-1 font-mono text-[12px] leading-relaxed text-gray-500 break-all">' +
           escapeHtml(step.subtitle) +
@@ -332,6 +496,7 @@ async function copyText(value) {
 function render() {
   const agent = currentAgent();
   const steps = flowStepsForAgent(state.agentId);
+  const risks = byAgent(trace.risks || []);
 
   document.querySelector("#agents").innerHTML =
     (trace.agents || [])
@@ -358,8 +523,86 @@ function render() {
     });
   });
 
+  const agentName = document.querySelector("#agent-name");
+  if (agentName) agentName.textContent = agent ? agent.name : "No agent detected";
+  const agentDescription = document.querySelector("#agent-description");
+  if (agentDescription) {
+    agentDescription.textContent = agent
+      ? agent.description || "Static scan found agent-like behavior in this code path."
+      : "Run the scanner on a repo with AI SDK routes or client hooks.";
+  }
+
+  const tabs = document.querySelector("#view-tabs");
+  if (tabs) {
+    tabs.innerHTML =
+      '<button type="button" class="' +
+      viewButtonClass(state.view === "report") +
+      '" data-view="report">Report</button>' +
+      '<button type="button" class="' +
+      viewButtonClass(state.view === "risks") +
+      '" data-view="risks">Risks ' +
+      escapeHtml(String(risks.length)) +
+      "</button>";
+    tabs.querySelectorAll("[data-view]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.view = button.dataset.view;
+        state.selectedId = "";
+        state.kind = "";
+        render();
+      });
+    });
+  }
+
   const noteEl = document.querySelector("#flow-note");
-  if (noteEl) noteEl.textContent = trace.flowNote || "";
+  const kicker = document.querySelector("#section-kicker");
+  if (kicker) kicker.textContent = state.view === "risks" ? "Risks" : "User journey";
+  if (noteEl) {
+    noteEl.textContent =
+      state.view === "risks"
+        ? "Static risks found for the selected agent. Treat these as review targets, not runtime proof."
+        : trace.flowNote || "";
+  }
+
+  if (state.view === "risks") {
+    if (!state.selectedId && risks[0]) {
+      state.selectedId = risks[0].id;
+      state.kind = "risks";
+    }
+    const currentRisk = risks.find(function (risk) {
+      return risk.id === state.selectedId;
+    });
+    if (state.selectedId && !currentRisk && risks[0]) {
+      state.selectedId = risks[0].id;
+      state.kind = "risks";
+    }
+
+    document.querySelector("#flow-timeline").innerHTML = renderRiskTimeline(risks);
+    document.querySelectorAll("[data-risk-id]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.selectedId = button.dataset.riskId;
+        state.kind = "risks";
+        render();
+      });
+    });
+
+    const risk = risks.find(function (item) {
+      return item.id === state.selectedId;
+    });
+    const riskIndex = risk ? risks.findIndex((item) => item.id === risk.id) + 1 : 0;
+    document.querySelector("#detail-title").textContent = risk ? "Risk " + riskIndex + " · " + (risk.severity || "review") : "Risk details";
+    const detailBox = document.querySelector("#detail-box");
+    detailBox.className =
+      "min-h-[280px] rounded-xl bg-white p-5 shadow-sm " +
+      (risk ? "border-2 border-blue-500 ring-2 ring-blue-50" : "border border-gray-200");
+    detailBox.innerHTML = renderRiskDetail(risk);
+
+    document.querySelectorAll(".copy-path").forEach(function (button) {
+      button.addEventListener("click", function () {
+        copyText(button.dataset.copy);
+      });
+    });
+    return;
+  }
 
   if (!state.selectedId && steps[0]) {
     state.selectedId = steps[0].id;
