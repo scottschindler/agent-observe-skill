@@ -1,13 +1,13 @@
 ---
 name: agent-observe-skill
-description: Scan a local codebase for Agent Observe evidence and gaps. Use when a user asks to map or audit AI agent prompts, Vercel AI SDK calls, tool definitions, tool schemas, chain steps, API routes, client chat entrypoints, eval coverage, trace IDs, logging, or side-effect risks in a repository.
+description: Scan a local codebase for Agent Observe evidence and gaps. Use when a user asks to map or audit AI agent prompts, Vercel AI SDK calls, OpenAI SDK calls, tool definitions, tool schemas, chain steps, API routes, client chat entrypoints, eval coverage, trace IDs, logging, or side-effect risks in a repository.
 ---
 
 # Agent Observe Skill
 
 ## Overview
 
-Use this skill to generate a local observability report for an AI-agent codebase. It is optimized for Vercel AI SDK patterns first, then falls back to broader static evidence.
+Use this skill to generate a local observability report for an AI-agent codebase. It is optimized for Vercel AI SDK and OpenAI SDK patterns first, then falls back to broader static evidence.
 
 The scanner writes all output into `.agent-observe-skill/` in the target repo. The user's code stays local.
 
@@ -68,12 +68,14 @@ Use `index.html` for the visual preview and `report.md` for the user-facing summ
 
 ## Detection Priorities
 
-Prioritize these Vercel AI SDK signals:
+Prioritize these Vercel AI SDK and OpenAI SDK signals:
 
 - `streamText(...)`
 - `generateText(...)`
 - `streamObject(...)`
 - `generateObject(...)`
+- `openai.chat.completions.create(...)`
+- `openai.responses.create(...)`
 - `tool(...)`
 - `ToolLoopAgent`
 - `system`, `prompt`, and `messages`
