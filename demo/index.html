@@ -1,444 +1,429 @@
 <!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Agent Observe Skill</title>
-    <meta
-      name="description"
-      content="Drop one file into your repo. See every prompt, tool, chain, route, and risk. Your code never leaves your machine."
-    />
-    <style>
-      :root {
-        color-scheme: light;
-        --bg: #f7f8f5;
-        --panel: #ffffff;
-        --ink: #171a16;
-        --muted: #637063;
-        --line: #d7ddd2;
-        --blue: #2f80ed;
-        --green: #1b7c55;
-        --shadow: 0 16px 45px rgba(35, 44, 30, 0.08);
-        font-family:
-          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-      }
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Agent Observe — Demo</title>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<script>tailwind.config={theme:{extend:{fontFamily:{sans:["Inter","sans-serif"],mono:["JetBrains Mono","monospace"]}}}};</script>
+<style>body{-webkit-font-smoothing:antialiased}.flow-step-nested .flow-rail{padding-left:.35rem}.flow-step-nested .flow-card{margin-left:.25rem}</style>
+</head>
+<body class="bg-white text-gray-900 min-h-screen flex flex-col">
+<header class="max-w-6xl mx-auto px-6 pt-6 flex justify-end w-full"><a href="../" class="text-[13px] text-gray-500 hover:text-gray-900">← Back</a></header>
+<main class="max-w-6xl mx-auto px-6 pt-6 pb-16 space-y-4 flex-grow w-full">
+<div>
+<div class="flex flex-wrap gap-2 mb-3" id="agents" aria-label="Select agent"></div>
+<h1 class="text-2xl sm:text-3xl font-bold tracking-tight">Results</h1>
+</div>
+<section class="p-4 sm:p-5 rounded-2xl border border-gray-200 bg-white shadow-sm">
+<p class="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Execution flow</p>
+<p class="text-[12px] text-gray-500 mb-4 leading-relaxed" id="flow-note"></p>
+<div class="grid lg:grid-cols-2 gap-6 items-start">
+<div class="max-h-[min(72vh,720px)] overflow-y-auto pr-2" id="flow-timeline"></div>
+<div class="lg:sticky lg:top-4"><div class="text-[13px] font-semibold uppercase tracking-wide text-gray-500 mb-2" id="detail-title">Step details</div><div class="min-h-[240px] rounded-xl border border-gray-200 bg-white p-4 shadow-sm" id="detail-box"></div></div>
+</div>
+</section>
+</main>
+<script>const trace={"generatedAt":"2026-05-29T02:40:50.641Z","root":"/Users/scottschindler/Documents/agent-observe/agent-observe-skill/fixtures/sample-agent","scanner":"agent-observe-skill.sh","selection":{"selectedAgent":null,"selectedAgents":[],"label":"All detected agents","mode":"all-agents"},"summary":{"agents":2,"prompts":13,"tools":7,"chains":8,"routes":1,"uiEntrypoints":3,"risks":17},"flows":{"file:agent-observe-skill":[{"phase":"prompt","kind":"prompts","id":"prompt:app/agent-observe-skill/page.tsx:81:system:2","title":"System prompt","subtitle":"'You are a support agent. Be concise.'","note":"Instructions are attached before the model runs.","order":1},{"phase":"prompt","kind":"prompts","id":"prompt:app/agent-observe-skill/page.tsx:72:prompt:1","title":"prompt prompt","subtitle":"app","note":"Instructions are attached before the model runs.","order":2},{"phase":"model","kind":"chains","id":"chain:app/agent-observe-skill/page.tsx:81:streamText","title":"Model call · streamText","subtitle":"openai(\\\"gpt-4.1-mini\\\" · app/agent-observe-skill/page.tsx:81","note":"The LLM runs and may invoke tools in a loop (order varies at runtime).","order":3},{"phase":"tool","kind":"tools","id":"tool:app/agent-observe-skill/page.tsx:170:searchOrders","title":"Tool · searchOrders","subtitle":"No inputSchema detected","note":"Model may call this to fetch data (no side effects detected).","nested":true,"order":4},{"phase":"side-effect","kind":"tools","id":"tool:app/agent-observe-skill/page.tsx:125:refundUser","title":"External action · refundUser","subtitle":"app/agent-observe-skill/page.tsx:125","note":"Database, payment, email, or other mutation when the model invokes this tool.","nested":true,"order":5},{"phase":"output","kind":"chains","id":"chain:app/agent-observe-skill/page.tsx:81:streamText:output","title":"Response to client","subtitle":"Streamed tokens to the client (data stream)","note":"Final output leaves the server and returns to the entry point.","order":6},{"phase":"prompt","kind":"prompts","id":"prompt:app/agent-observe-skill/page.tsx:138:system:3","title":"System prompt","subtitle":"'You are a support agent. Be concise.'","note":"Instructions are attached before the model runs.","order":7},{"phase":"prompt","kind":"prompts","id":"prompt:app/agent-observe-skill/page.tsx:141:prompt:4","title":"prompt prompt","subtitle":"app","note":"Instructions are attached before the model runs.","order":8},{"phase":"prompt","kind":"prompts","id":"prompt:app/agent-observe-skill/page.tsx:153:system:5","title":"System prompt","subtitle":"'You are a support agent. Be concise.'","note":"Instructions are attached before the model runs.","order":9},{"phase":"prompt","kind":"prompts","id":"prompt:app/agent-observe-skill/page.tsx:154:system:6","title":"System prompt","subtitle":"'You are a support agent. Be concise.'","note":"Instructions are attached before the model runs.","order":10},{"phase":"model","kind":"chains","id":"chain:app/agent-observe-skill/page.tsx:153:streamText","title":"Model call · streamText","subtitle":"openai(\\\"gpt-4.1-mini\\\" · app/agent-observe-skill/page.tsx:153","note":"The LLM runs and may invoke tools in a loop (order varies at runtime).","order":11},{"phase":"tool","kind":"tools","id":"tool:app/agent-observe-skill/page.tsx:170:searchOrders","title":"Tool · searchOrders","subtitle":"No inputSchema detected","note":"Model may call this to fetch data (no side effects detected).","nested":true,"order":12},{"phase":"side-effect","kind":"tools","id":"tool:app/agent-observe-skill/page.tsx:125:refundUser","title":"External action · refundUser","subtitle":"app/agent-observe-skill/page.tsx:125","note":"Database, payment, email, or other mutation when the model invokes this tool.","nested":true,"order":13},{"phase":"output","kind":"chains","id":"chain:app/agent-observe-skill/page.tsx:153:streamText:output","title":"Response to client","subtitle":"Streamed tokens to the client (data stream)","note":"Final output leaves the server and returns to the entry point.","order":14},{"phase":"model","kind":"chains","id":"chain:app/agent-observe-skill/page.tsx:154:streamText","title":"Model call · streamText","subtitle":"openai(\\\"gpt-4.1-mini\\\" · app/agent-observe-skill/page.tsx:154","note":"The LLM runs and may invoke tools in a loop (order varies at runtime).","order":15},{"phase":"tool","kind":"tools","id":"tool:app/agent-observe-skill/page.tsx:170:searchOrders","title":"Tool · searchOrders","subtitle":"No inputSchema detected","note":"Model may call this to fetch data (no side effects detected).","nested":true,"order":16},{"phase":"side-effect","kind":"tools","id":"tool:app/agent-observe-skill/page.tsx:125:refundUser","title":"External action · refundUser","subtitle":"app/agent-observe-skill/page.tsx:125","note":"Database, payment, email, or other mutation when the model invokes this tool.","nested":true,"order":17},{"phase":"output","kind":"chains","id":"chain:app/agent-observe-skill/page.tsx:154:streamText:output","title":"Response to client","subtitle":"Streamed tokens to the client (data stream)","note":"Final output leaves the server and returns to the entry point.","order":18},{"phase":"prompt","kind":"prompts","id":"prompt:app/agent-observe-skill/page.tsx:197:prompt:7","title":"prompt prompt","subtitle":"app","note":"Instructions are attached before the model runs.","order":19},{"phase":"prompt","kind":"prompts","id":"prompt:app/agent-observe-skill/page.tsx:207:system:8","title":"System prompt","subtitle":"'You are a support agent. Be concise.'","note":"Instructions are attached before the model runs.","order":20},{"phase":"prompt","kind":"prompts","id":"prompt:app/agent-observe-skill/page.tsx:208:system:9","title":"System prompt","subtitle":"'You are a support agent. Be concise.'","note":"Instructions are attached before the model runs.","order":21},{"phase":"model","kind":"chains","id":"chain:app/agent-observe-skill/page.tsx:207:streamText","title":"Model call · streamText","subtitle":"openai(\\\"gpt-4.1-mini\\\" · app/agent-observe-skill/page.tsx:207","note":"The LLM runs and may invoke tools in a loop (order varies at runtime).","order":22},{"phase":"tool","kind":"tools","id":"tool:app/agent-observe-skill/page.tsx:170:searchOrders","title":"Tool · searchOrders","subtitle":"No inputSchema detected","note":"Model may call this to fetch data (no side effects detected).","nested":true,"order":23},{"phase":"side-effect","kind":"tools","id":"tool:app/agent-observe-skill/page.tsx:125:refundUser","title":"External action · refundUser","subtitle":"app/agent-observe-skill/page.tsx:125","note":"Database, payment, email, or other mutation when the model invokes this tool.","nested":true,"order":24},{"phase":"output","kind":"chains","id":"chain:app/agent-observe-skill/page.tsx:207:streamText:output","title":"Response to client","subtitle":"Streamed model output (streamText)","note":"Final output leaves the server and returns to the entry point.","order":25},{"phase":"prompt","kind":"prompts","id":"prompt:app/agent-observe-skill/page.tsx:220:system:10","title":"System prompt","subtitle":"'You are a support agent. Be concise.'","note":"Instructions are attached before the model runs.","order":26},{"phase":"model","kind":"chains","id":"chain:app/agent-observe-skill/page.tsx:208:streamText","title":"Model call · streamText","subtitle":"openai(\\\"gpt-4.1-mini\\\" · app/agent-observe-skill/page.tsx:208","note":"The LLM runs and may invoke tools in a loop (order varies at runtime).","order":27},{"phase":"tool","kind":"tools","id":"tool:app/agent-observe-skill/page.tsx:170:searchOrders","title":"Tool · searchOrders","subtitle":"No inputSchema detected","note":"Model may call this to fetch data (no side effects detected).","nested":true,"order":28},{"phase":"side-effect","kind":"tools","id":"tool:app/agent-observe-skill/page.tsx:125:refundUser","title":"External action · refundUser","subtitle":"app/agent-observe-skill/page.tsx:125","note":"Database, payment, email, or other mutation when the model invokes this tool.","nested":true,"order":29},{"phase":"output","kind":"chains","id":"chain:app/agent-observe-skill/page.tsx:208:streamText:output","title":"Response to client","subtitle":"Streamed model output (streamText)","note":"Final output leaves the server and returns to the entry point.","order":30},{"phase":"prompt","kind":"prompts","id":"prompt:app/agent-observe-skill/page.tsx:221:system:11","title":"System prompt","subtitle":"'You are a support agent. Be concise.'","note":"Instructions are attached before the model runs.","order":31},{"phase":"model","kind":"chains","id":"chain:app/agent-observe-skill/page.tsx:220:streamText","title":"Model call · streamText","subtitle":"openai(\\\"gpt-4.1-mini\\\" · app/agent-observe-skill/page.tsx:220","note":"The LLM runs and may invoke tools in a loop (order varies at runtime).","order":32},{"phase":"tool","kind":"tools","id":"tool:app/agent-observe-skill/page.tsx:170:searchOrders","title":"Tool · searchOrders","subtitle":"No inputSchema detected","note":"Model may call this to fetch data (no side effects detected).","nested":true,"order":33},{"phase":"side-effect","kind":"tools","id":"tool:app/agent-observe-skill/page.tsx:125:refundUser","title":"External action · refundUser","subtitle":"app/agent-observe-skill/page.tsx:125","note":"Database, payment, email, or other mutation when the model invokes this tool.","nested":true,"order":34},{"phase":"output","kind":"chains","id":"chain:app/agent-observe-skill/page.tsx:220:streamText:output","title":"Response to client","subtitle":"Streamed model output (streamText)","note":"Final output leaves the server and returns to the entry point.","order":35},{"phase":"model","kind":"chains","id":"chain:app/agent-observe-skill/page.tsx:221:streamText","title":"Model call · streamText","subtitle":"openai(\\\"gpt-4.1-mini\\\" · app/agent-observe-skill/page.tsx:221","note":"The LLM runs and may invoke tools in a loop (order varies at runtime).","order":36},{"phase":"tool","kind":"tools","id":"tool:app/agent-observe-skill/page.tsx:170:searchOrders","title":"Tool · searchOrders","subtitle":"No inputSchema detected","note":"Model may call this to fetch data (no side effects detected).","nested":true,"order":37},{"phase":"side-effect","kind":"tools","id":"tool:app/agent-observe-skill/page.tsx:125:refundUser","title":"External action · refundUser","subtitle":"app/agent-observe-skill/page.tsx:125","note":"Database, payment, email, or other mutation when the model invokes this tool.","nested":true,"order":38},{"phase":"output","kind":"chains","id":"chain:app/agent-observe-skill/page.tsx:221:streamText:output","title":"Response to client","subtitle":"Streamed model output (streamText)","note":"Final output leaves the server and returns to the entry point.","order":39}],"route:chat":[{"phase":"entry","kind":"entrypoints","id":"ui:app/agent-observe-skill/page.tsx:181:useChat","title":"User entry · useChat","subtitle":"app/agent-observe-skill/page.tsx:181 → \\\"/api/chat\\\" }","note":"The user sends a message from the UI.","order":1},{"phase":"entry","kind":"entrypoints","id":"ui:app/agent-observe-skill/page.tsx:182:useChat","title":"User entry · useChat","subtitle":"app/agent-observe-skill/page.tsx:182 → \\\"/api/chat\\\" }","note":"The user sends a message from the UI.","order":2},{"phase":"entry","kind":"entrypoints","id":"ui:components/chat.tsx:5:useChat","title":"User entry · useChat","subtitle":"components/chat.tsx:5 → \"/api/chat\"","note":"The user sends a message from the UI.","order":3},{"phase":"route","kind":"routes","id":"route:app/api/chat/route.ts:1","title":"API route · POST","subtitle":"app/api/chat/route.ts","note":"The HTTP request reaches your server route.","order":4},{"phase":"prompt","kind":"prompts","id":"prompt:app/api/chat/route.ts:20:system:13","title":"System prompt","subtitle":"'You are a support agent. Be concise.'","note":"Instructions are attached before the model runs.","order":5},{"phase":"model","kind":"chains","id":"chain:app/api/chat/route.ts:18:streamText","title":"Model call · streamText","subtitle":"openai(\"gpt-4.1-mini\" · app/api/chat/route.ts:18","note":"The LLM runs and may invoke tools in a loop (order varies at runtime).","order":6},{"phase":"tool","kind":"tools","id":"tool:app/api/chat/route.ts:5:searchOrders","title":"Tool · searchOrders","subtitle":"orderId","note":"Model may call this to fetch data (no side effects detected).","nested":true,"order":7},{"phase":"side-effect","kind":"tools","id":"tool:app/api/chat/route.ts:11:refundUser","title":"External action · refundUser","subtitle":"app/api/chat/route.ts:11","note":"Database, payment, email, or other mutation when the model invokes this tool.","nested":true,"order":8},{"phase":"output","kind":"chains","id":"chain:app/api/chat/route.ts:18:streamText:output","title":"Response to client","subtitle":"Streamed tokens to the client (data stream)","note":"Final output leaves the server and returns to the entry point.","order":9}]},"flowNote":"Execution order is inferred from static code structure. Tool call order during a model loop may differ at runtime.","agents":[{"id":"file:agent-observe-skill","name":"Checkout assistant","source":"file","files":["app/agent-observe-skill/page.tsx"],"evidence":[{"file":"app/agent-observe-skill/page.tsx","line":72,"kind":"prompt"},{"file":"app/agent-observe-skill/page.tsx","line":81,"kind":"prompt"},{"file":"app/agent-observe-skill/page.tsx","line":138,"kind":"prompt"},{"file":"app/agent-observe-skill/page.tsx","line":141,"kind":"prompt"},{"file":"app/agent-observe-skill/page.tsx","line":153,"kind":"prompt"},{"file":"app/agent-observe-skill/page.tsx","line":154,"kind":"prompt"},{"file":"app/agent-observe-skill/page.tsx","line":197,"kind":"prompt"},{"file":"app/agent-observe-skill/page.tsx","line":207,"kind":"prompt"},{"file":"app/agent-observe-skill/page.tsx","line":208,"kind":"prompt"},{"file":"app/agent-observe-skill/page.tsx","line":220,"kind":"prompt"},{"file":"app/agent-observe-skill/page.tsx","line":221,"kind":"prompt"},{"file":"app/agent-observe-skill/page.tsx","line":253,"kind":"prompt"}],"counts":{"prompts":12,"tools":5,"chains":7,"routes":0,"uiEntrypoints":0,"risks":12},"score":69},{"id":"route:chat","name":"Chat","source":"client-api","files":["app/agent-observe-skill/page.tsx","app/api/chat/route.ts","components/chat.tsx"],"evidence":[{"file":"app/agent-observe-skill/page.tsx","line":181,"kind":"ui"},{"file":"app/agent-observe-skill/page.tsx","line":182,"kind":"ui"},{"file":"app/api/chat/route.ts","line":1,"kind":"route"},{"file":"app/api/chat/route.ts","line":20,"kind":"prompt"},{"file":"app/api/chat/route.ts","line":5,"kind":"tool"},{"file":"app/api/chat/route.ts","line":11,"kind":"tool"},{"file":"app/api/chat/route.ts","line":18,"kind":"chain"},{"file":"components/chat.tsx","line":5,"kind":"ui"}],"counts":{"prompts":1,"tools":2,"chains":1,"routes":1,"uiEntrypoints":3,"risks":5},"score":28}],"prompts":[{"id":"prompt:app/agent-observe-skill/page.tsx:72:prompt:1","file":"app/agent-observe-skill/page.tsx","line":72,"agentId":"file:agent-observe-skill","kind":"prompt","inline":false,"valueType":"reference","preview":"app","text":"app","snippet":"    67 |       \"score\": 21\n    68 |     }\n    69 |   ],\n    70 |   \"prompts\": [\n    71 |     {\n>   72 |       \"id\": \"prompt:app/api/chat/route.ts:20:system:1\",\n    73 |       \"file\": \"app/api/chat/route.ts\",\n    74 |       \"line\": 20,\n    75 |       \"agentId\": \"route:chat\",\n    76 |       \"kind\": \"system\",\n    77 |       \"inline\": true,"},{"id":"prompt:app/agent-observe-skill/page.tsx:81:system:2","file":"app/agent-observe-skill/page.tsx","line":81,"agentId":"file:agent-observe-skill","kind":"system","inline":true,"valueType":"inline literal","preview":"'You are a support agent. Be concise.'","text":"`You are a support agent. Be concise.`","snippet":"    76 |       \"kind\": \"system\",\n    77 |       \"inline\": true,\n    78 |       \"valueType\": \"inline literal\",\n    79 |       \"preview\": \"'You are a support agent. Be concise.'\",\n    80 |       \"text\": \"`You are a support agent. Be concise.`\",\n>   81 |       \"snippet\": \"    15 | });\\n    16 | \\n    17 | export async function POST() {\\n    18 |   const result = await streamText({\\n    19 |     model: openai(\\\"gpt-4.1-mini\\\"),\\n>   20 |     system: `You are a support agent. Be concise.`,\\n    21 |     tools: { searchOrders, refundUser },\\n    22 |   });\\n    23 |   return result.toDataStreamResponse();\\n    24 | }\\n    25 | \"\n    82 |     }\n    83 |   ],\n    84 |   \"tools\": [\n    85 |     {\n    86 |       \"id\": \"tool:app/api/chat/route.ts:5:searchOrders\","},{"id":"prompt:app/agent-observe-skill/page.tsx:138:system:3","file":"app/agent-observe-skill/page.tsx","line":138,"agentId":"file:agent-observe-skill","kind":"system","inline":true,"valueType":"inline literal","preview":"'You are a support agent. Be concise.'","text":"'You are a support agent. Be concise.'","snippet":"   133 |       \"agentId\": \"route:chat\",\n   134 |       \"type\": \"streamText\",\n   135 |       \"model\": \"openai(\\\"gpt-4.1-mini\\\"\",\n   136 |       \"modelFull\": \"openai(\\\"gpt-4.1-mini\\\"\",\n   137 |       \"prompts\": [\n>  138 |         \"system: 'You are a support agent. Be concise.'\"\n   139 |       ],\n   140 |       \"promptIds\": [\n   141 |         \"prompt:app/api/chat/route.ts:20:system:1\"\n   142 |       ],\n   143 |       \"tools\": ["},{"id":"prompt:app/agent-observe-skill/page.tsx:141:prompt:4","file":"app/agent-observe-skill/page.tsx","line":141,"agentId":"file:agent-observe-skill","kind":"prompt","inline":false,"valueType":"reference","preview":"app","text":"app","snippet":"   136 |       \"modelFull\": \"openai(\\\"gpt-4.1-mini\\\"\",\n   137 |       \"prompts\": [\n   138 |         \"system: 'You are a support agent. Be concise.'\"\n   139 |       ],\n   140 |       \"promptIds\": [\n>  141 |         \"prompt:app/api/chat/route.ts:20:system:1\"\n   142 |       ],\n   143 |       \"tools\": [\n   144 |         \"searchOrders\",\n   145 |         \"refundUser\"\n   146 |       ],"},{"id":"prompt:app/agent-observe-skill/page.tsx:153:system:5","file":"app/agent-observe-skill/page.tsx","line":153,"agentId":"file:agent-observe-skill","kind":"system","inline":true,"valueType":"inline literal","preview":"'You are a support agent. Be concise.'","text":"'You are a support agent. Be concise.'","snippet":"   148 |         \"tool:app/api/chat/route.ts:5:searchOrders\",\n   149 |         \"tool:app/api/chat/route.ts:11:refundUser\"\n   150 |       ],\n   151 |       \"hasEval\": false,\n   152 |       \"hasTrace\": false,\n>  153 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n   154 |       \"snippet\": \"    13 |   inputSchema: z.object({ orderId: z.string() }),\\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \\\"POST\\\", body: orderId }),\\n    15 | });\\n    16 | \\n    17 | export async function POST() {\\n>   18 |   const result = await streamText({\\n    19 |     model: openai(\\\"gpt-4.1-mini\\\"),\\n    20 |     system: `You are a support agent. Be concise.`,\\n    21 |     tools: { searchOrders, refundUser },\\n    22 |   });\\n    23 |   return result.toDataStreamResponse();\"\n   155 |     }\n   156 |   ],\n   157 |   \"routes\": [\n   158 |     {"},{"id":"prompt:app/agent-observe-skill/page.tsx:154:system:6","file":"app/agent-observe-skill/page.tsx","line":154,"agentId":"file:agent-observe-skill","kind":"system","inline":true,"valueType":"inline literal","preview":"'You are a support agent. Be concise.'","text":"`You are a support agent. Be concise.`","snippet":"   149 |         \"tool:app/api/chat/route.ts:11:refundUser\"\n   150 |       ],\n   151 |       \"hasEval\": false,\n   152 |       \"hasTrace\": false,\n   153 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n>  154 |       \"snippet\": \"    13 |   inputSchema: z.object({ orderId: z.string() }),\\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \\\"POST\\\", body: orderId }),\\n    15 | });\\n    16 | \\n    17 | export async function POST() {\\n>   18 |   const result = await streamText({\\n    19 |     model: openai(\\\"gpt-4.1-mini\\\"),\\n    20 |     system: `You are a support agent. Be concise.`,\\n    21 |     tools: { searchOrders, refundUser },\\n    22 |   });\\n    23 |   return result.toDataStreamResponse();\"\n   155 |     }\n   156 |   ],\n   157 |   \"routes\": [\n   158 |     {\n   159 |       \"id\": \"route:app/api/chat/route.ts:1\","},{"id":"prompt:app/agent-observe-skill/page.tsx:197:prompt:7","file":"app/agent-observe-skill/page.tsx","line":197,"agentId":"file:agent-observe-skill","kind":"prompt","inline":false,"valueType":"reference","preview":"app","text":"app","snippet":"   192 |       \"line\": 20,\n   193 |       \"message\": \"Prompt is inline and harder to audit, diff, reuse, or cover with evals.\",\n   194 |       \"evidence\": \"'You are a support agent. Be concise.'\",\n   195 |       \"evidenceFull\": \"'You are a support agent. Be concise.'\",\n   196 |       \"fix\": \"Extract the prompt to a named constant or dedicated file, then add eval coverage.\",\n>  197 |       \"targetId\": \"prompt:app/api/chat/route.ts:20:system:1\",\n   198 |       \"agentId\": \"route:chat\"\n   199 |     },\n   200 |     {\n   201 |       \"id\": \"risk:app/api/chat/route.ts:18:missing-eval:2\",\n   202 |       \"kind\": \"missing-eval\","},{"id":"prompt:app/agent-observe-skill/page.tsx:207:system:8","file":"app/agent-observe-skill/page.tsx","line":207,"agentId":"file:agent-observe-skill","kind":"system","inline":true,"valueType":"inline literal","preview":"'You are a support agent. Be concise.'","text":"'You are a support agent. Be concise.'","snippet":"   202 |       \"kind\": \"missing-eval\",\n   203 |       \"severity\": \"medium\",\n   204 |       \"file\": \"app/api/chat/route.ts\",\n   205 |       \"line\": 18,\n   206 |       \"message\": \"streamText chain lacks nearby eval or test evidence.\",\n>  207 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n   208 |       \"evidenceFull\": \"streamText({\\n    model: openai(\\\"gpt-4.1-mini\\\"),\\n    system: `You are a support agent. Be concise.`,\\n    tools: { searchOrders, refundUser },\\n  })\",\n   209 |       \"fix\": \"Add promptfoo, vitest, or runtime evals near this chain.\",\n   210 |       \"targetId\": \"chain:app/api/chat/route.ts:18:streamText\",\n   211 |       \"agentId\": \"route:chat\"\n   212 |     },"},{"id":"prompt:app/agent-observe-skill/page.tsx:208:system:9","file":"app/agent-observe-skill/page.tsx","line":208,"agentId":"file:agent-observe-skill","kind":"system","inline":true,"valueType":"inline literal","preview":"'You are a support agent. Be concise.'","text":"`You are a support agent. Be concise.`","snippet":"   203 |       \"severity\": \"medium\",\n   204 |       \"file\": \"app/api/chat/route.ts\",\n   205 |       \"line\": 18,\n   206 |       \"message\": \"streamText chain lacks nearby eval or test evidence.\",\n   207 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n>  208 |       \"evidenceFull\": \"streamText({\\n    model: openai(\\\"gpt-4.1-mini\\\"),\\n    system: `You are a support agent. Be concise.`,\\n    tools: { searchOrders, refundUser },\\n  })\",\n   209 |       \"fix\": \"Add promptfoo, vitest, or runtime evals near this chain.\",\n   210 |       \"targetId\": \"chain:app/api/chat/route.ts:18:streamText\",\n   211 |       \"agentId\": \"route:chat\"\n   212 |     },\n   213 |     {"},{"id":"prompt:app/agent-observe-skill/page.tsx:220:system:10","file":"app/agent-observe-skill/page.tsx","line":220,"agentId":"file:agent-observe-skill","kind":"system","inline":true,"valueType":"inline literal","preview":"'You are a support agent. Be concise.'","text":"'You are a support agent. Be concise.'","snippet":"   215 |       \"kind\": \"missing-trace\",\n   216 |       \"severity\": \"high\",\n   217 |       \"file\": \"app/api/chat/route.ts\",\n   218 |       \"line\": 18,\n   219 |       \"message\": \"streamText chain lacks trace ID, structured logging, or AI SDK telemetry evidence.\",\n>  220 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n   221 |       \"evidenceFull\": \"streamText({\\n    model: openai(\\\"gpt-4.1-mini\\\"),\\n    system: `You are a support agent. Be concise.`,\\n    tools: { searchOrders, refundUser },\\n  })\",\n   222 |       \"fix\": \"Add traceId, structured logging, or AI SDK experimental_telemetry.\",\n   223 |       \"targetId\": \"chain:app/api/chat/route.ts:18:streamText\",\n   224 |       \"agentId\": \"route:chat\"\n   225 |     },"},{"id":"prompt:app/agent-observe-skill/page.tsx:221:system:11","file":"app/agent-observe-skill/page.tsx","line":221,"agentId":"file:agent-observe-skill","kind":"system","inline":true,"valueType":"inline literal","preview":"'You are a support agent. Be concise.'","text":"`You are a support agent. Be concise.`","snippet":"   216 |       \"severity\": \"high\",\n   217 |       \"file\": \"app/api/chat/route.ts\",\n   218 |       \"line\": 18,\n   219 |       \"message\": \"streamText chain lacks trace ID, structured logging, or AI SDK telemetry evidence.\",\n   220 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n>  221 |       \"evidenceFull\": \"streamText({\\n    model: openai(\\\"gpt-4.1-mini\\\"),\\n    system: `You are a support agent. Be concise.`,\\n    tools: { searchOrders, refundUser },\\n  })\",\n   222 |       \"fix\": \"Add traceId, structured logging, or AI SDK experimental_telemetry.\",\n   223 |       \"targetId\": \"chain:app/api/chat/route.ts:18:streamText\",\n   224 |       \"agentId\": \"route:chat\"\n   225 |     },\n   226 |     {"},{"id":"prompt:app/agent-observe-skill/page.tsx:253:prompt:12","file":"app/agent-observe-skill/page.tsx","line":253,"agentId":"file:agent-observe-skill","kind":"prompt","inline":false,"valueType":"reference","preview":"any","text":"any","snippet":"   248 |   const agent = data.agents.find((item: any) => item.id === agentId);\n   249 |   const byAgent = (items: any[]) => (items || []).filter((item: any) => item.agentId === agentId);\n   250 |   const rows = useMemo(() => {\n   251 |     if (kind === \"entrypoints\") return byAgent(data.uiEntrypoints).map((entry: any) => ({ meta: \"UI entry\", title: entry.hook, code: entry.file + \":\" + entry.line + \" · API: \" + entry.api }));\n   252 |     if (kind === \"tools\") return byAgent(data.tools).map((tool: any) => ({ meta: tool.sideEffect ? \"side-effect tool\" : \"tool\", title: tool.name, code: tool.schema + \" · \" + tool.file + \":\" + tool.line }));\n>  253 |     if (kind === \"prompts\") return byAgent(data.prompts).map((prompt: any) => ({ meta: prompt.kind, title: prompt.preview, code: prompt.file + \":\" + prompt.line }));\n   254 |     if (kind === \"chains\") return byAgent(data.chains).map((chain: any) => ({ meta: chain.type, title: chain.model, code: chain.file + \":\" + chain.line + \" · tools: \" + ((chain.tools || []).join(\", \") || \"none\") }));\n   255 |     if (kind === \"routes\") return byAgent(data.routes).map((route: any) => ({ meta: route.kind, title: route.file, code: \"methods: \" + ((route.methods || []).join(\", \") || \"unknown\") + \" · AI: \" + ((route.aiPatterns || []).join(\", \") || \"none\") }));\n   256 |     return byAgent(data.risks).map((risk: any) => ({ meta: risk.severity + \" / \" + risk.kind, title: risk.message, code: risk.file + \":\" + risk.line }));\n   257 |   }, [agentId, kind]);\n   258 |   const count = (item: string) => item === \"entrypoints\" ? byAgent(data.uiEntrypoints).length : (item === \"routes\" ? byAgent(data.routes).length : item === \"tools\" ? byAgent(data.tools).length : item === \"prompts\" ? byAgent(data.prompts).length : item === \"chains\" ? byAgent(data.chains).length : byAgent(data.risks).length);"},{"id":"prompt:app/api/chat/route.ts:20:system:13","file":"app/api/chat/route.ts","line":20,"agentId":"route:chat","kind":"system","inline":true,"valueType":"inline literal","preview":"'You are a support agent. Be concise.'","text":"`You are a support agent. Be concise.`","snippet":"    15 | });\n    16 | \n    17 | export async function POST() {\n    18 |   const result = await streamText({\n    19 |     model: openai(\"gpt-4.1-mini\"),\n>   20 |     system: `You are a support agent. Be concise.`,\n    21 |     tools: { searchOrders, refundUser },\n    22 |   });\n    23 |   return result.toDataStreamResponse();\n    24 | }\n    25 | "}],"tools":[{"id":"tool:app/agent-observe-skill/page.tsx:103:tool_1","file":"app/agent-observe-skill/page.tsx","line":103,"agentId":"file:agent-observe-skill","name":"tool_1","description":"\\\"Find orders by id\\\"","descriptionFull":"\\\"Find orders by id\\\"","schema":"orderId","schemaFields":[{"name":"orderId","type":"z.string"}],"hasInputSchema":true,"hasExecute":true,"sideEffect":true,"evidence":"tool({ description: \\\"Find orders by id\\\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => ({ orderId, status: \\\"shipped\\\" }), })\", \"snippet\": \" 1 | import { streamText, tool } from \\\"ai\\\";\\n 2 | import { op...","snippet":"    98 |         }\n    99 |       ],\n   100 |       \"hasInputSchema\": true,\n   101 |       \"hasExecute\": true,\n   102 |       \"sideEffect\": false,\n>  103 |       \"evidence\": \"tool({ description: \\\"Find orders by id\\\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => ({ orderId, status: \\\"shipped\\\" }), })\",\n   104 |       \"snippet\": \"     1 | import { streamText, tool } from \\\"ai\\\";\\n     2 | import { openai } from \\\"@ai-sdk/openai\\\";\\n     3 | import { z } from \\\"zod\\\";\\n     4 | \\n>    5 | const searchOrders = tool({\\n     6 |   description: \\\"Find orders by id\\\",\\n     7 |   inputSchema: z.object({ orderId: z.string() }),\\n     8 |   execute: async ({ orderId }) => ({ orderId, status: \\\"shipped\\\" }),\\n     9 | });\\n    10 | \"\n   105 |     },\n   106 |     {\n   107 |       \"id\": \"tool:app/api/chat/route.ts:11:refundUser\",\n   108 |       \"file\": \"app/api/chat/route.ts\","},{"id":"tool:app/agent-observe-skill/page.tsx:104:searchOrders","file":"app/agent-observe-skill/page.tsx","line":104,"agentId":"file:agent-observe-skill","name":"searchOrders","description":"\\\"Find orders by id\\\"","descriptionFull":"\\\"Find orders by id\\\"","schema":"orderId","schemaFields":[{"name":"orderId","type":"z.string"}],"hasInputSchema":true,"hasExecute":true,"sideEffect":true,"evidence":"tool({\\n 6 | description: \\\"Find orders by id\\\",\\n 7 | inputSchema: z.object({ orderId: z.string() }),\\n 8 | execute: async ({ orderId }) => ({ orderId, status: \\\"shipped\\\" }),\\n 9 | });\\n 10 | \" }, { \"id\": \"tool:app/api/chat/route.ts:11:r...","snippet":"    99 |       ],\n   100 |       \"hasInputSchema\": true,\n   101 |       \"hasExecute\": true,\n   102 |       \"sideEffect\": false,\n   103 |       \"evidence\": \"tool({ description: \\\"Find orders by id\\\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => ({ orderId, status: \\\"shipped\\\" }), })\",\n>  104 |       \"snippet\": \"     1 | import { streamText, tool } from \\\"ai\\\";\\n     2 | import { openai } from \\\"@ai-sdk/openai\\\";\\n     3 | import { z } from \\\"zod\\\";\\n     4 | \\n>    5 | const searchOrders = tool({\\n     6 |   description: \\\"Find orders by id\\\",\\n     7 |   inputSchema: z.object({ orderId: z.string() }),\\n     8 |   execute: async ({ orderId }) => ({ orderId, status: \\\"shipped\\\" }),\\n     9 | });\\n    10 | \"\n   105 |     },\n   106 |     {\n   107 |       \"id\": \"tool:app/api/chat/route.ts:11:refundUser\",\n   108 |       \"file\": \"app/api/chat/route.ts\",\n   109 |       \"line\": 11,"},{"id":"tool:app/agent-observe-skill/page.tsx:124:tool_3","file":"app/agent-observe-skill/page.tsx","line":124,"agentId":"file:agent-observe-skill","name":"tool_3","description":"\\\"Refund an order\\\"","descriptionFull":"\\\"Refund an order\\\"","schema":"orderId","schemaFields":[{"name":"orderId","type":"z.string"}],"hasInputSchema":true,"hasExecute":true,"sideEffect":true,"evidence":"tool({ description: \\\"Refund an order\\\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => fetch('/api/refund', { method: \\\"POST\\\", body: orderId }), })\", \"snippet\": \" 6 | description: \\\"Find orders by id\\\",\\n...","snippet":"   119 |         }\n   120 |       ],\n   121 |       \"hasInputSchema\": true,\n   122 |       \"hasExecute\": true,\n   123 |       \"sideEffect\": false,\n>  124 |       \"evidence\": \"tool({ description: \\\"Refund an order\\\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => fetch('/api/refund', { method: \\\"POST\\\", body: orderId }), })\",\n   125 |       \"snippet\": \"     6 |   description: \\\"Find orders by id\\\",\\n     7 |   inputSchema: z.object({ orderId: z.string() }),\\n     8 |   execute: async ({ orderId }) => ({ orderId, status: \\\"shipped\\\" }),\\n     9 | });\\n    10 | \\n>   11 | const refundUser = tool({\\n    12 |   description: \\\"Refund an order\\\",\\n    13 |   inputSchema: z.object({ orderId: z.string() }),\\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \\\"POST\\\", body: orderId }),\\n    15 | });\\n    16 | \"\n   126 |     }\n   127 |   ],\n   128 |   \"chains\": [\n   129 |     {"},{"id":"tool:app/agent-observe-skill/page.tsx:125:refundUser","file":"app/agent-observe-skill/page.tsx","line":125,"agentId":"file:agent-observe-skill","name":"refundUser","description":"\\\"Refund an order\\\"","descriptionFull":"\\\"Refund an order\\\"","schema":"orderId","schemaFields":[{"name":"orderId","type":"z.string"}],"hasInputSchema":true,"hasExecute":true,"sideEffect":true,"evidence":"tool({\\n 12 | description: \\\"Refund an order\\\",\\n 13 | inputSchema: z.object({ orderId: z.string() }),\\n 14 | execute: async ({ orderId }) => fetch('/api/refund', { method: \\\"POST\\\", body: orderId }),\\n 15 | });\\n 16 | \" } ], \"chains\": [ {...","snippet":"   120 |       ],\n   121 |       \"hasInputSchema\": true,\n   122 |       \"hasExecute\": true,\n   123 |       \"sideEffect\": false,\n   124 |       \"evidence\": \"tool({ description: \\\"Refund an order\\\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => fetch('/api/refund', { method: \\\"POST\\\", body: orderId }), })\",\n>  125 |       \"snippet\": \"     6 |   description: \\\"Find orders by id\\\",\\n     7 |   inputSchema: z.object({ orderId: z.string() }),\\n     8 |   execute: async ({ orderId }) => ({ orderId, status: \\\"shipped\\\" }),\\n     9 | });\\n    10 | \\n>   11 | const refundUser = tool({\\n    12 |   description: \\\"Refund an order\\\",\\n    13 |   inputSchema: z.object({ orderId: z.string() }),\\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \\\"POST\\\", body: orderId }),\\n    15 | });\\n    16 | \"\n   126 |     }\n   127 |   ],\n   128 |   \"chains\": [\n   129 |     {\n   130 |       \"id\": \"chain:app/api/chat/route.ts:18:streamText\","},{"id":"tool:app/agent-observe-skill/page.tsx:170:searchOrders","file":"app/agent-observe-skill/page.tsx","line":170,"agentId":"file:agent-observe-skill","name":"searchOrders","description":"\\\"Find orders by id\\\"","descriptionFull":"\\\"Find orders by id\\\"","schema":"No inputSchema detected","schemaFields":[],"hasInputSchema":false,"hasExecute":false,"sideEffect":false,"evidence":"tool({\\n 6 | description: \\\"Find orders by id\\\",\", \"agentId\": \"route:chat\" } ], \"uiEntrypoints\": [ { \"id\": \"ui:components/chat.tsx:5:useChat\", \"file\": \"components/chat.tsx\", \"line\": 5, \"hook\": \"useChat\", \"api\": \"\\\"/api/chat\\\"\", \"evidence\":...","snippet":"   165 |       ],\n   166 |       \"aiPatterns\": [\n   167 |         \"streamText\"\n   168 |       ],\n   169 |       \"hasTrace\": false,\n>  170 |       \"snippet\": \">    1 | import { streamText, tool } from \\\"ai\\\";\\n     2 | import { openai } from \\\"@ai-sdk/openai\\\";\\n     3 | import { z } from \\\"zod\\\";\\n     4 | \\n     5 | const searchOrders = tool({\\n     6 |   description: \\\"Find orders by id\\\",\",\n   171 |       \"agentId\": \"route:chat\"\n   172 |     }\n   173 |   ],\n   174 |   \"uiEntrypoints\": [\n   175 |     {"},{"id":"tool:app/api/chat/route.ts:5:searchOrders","file":"app/api/chat/route.ts","line":5,"agentId":"route:chat","name":"searchOrders","description":"\"Find orders by id\"","descriptionFull":"\"Find orders by id\"","schema":"orderId","schemaFields":[{"name":"orderId","type":"z.string"}],"hasInputSchema":true,"hasExecute":true,"sideEffect":false,"evidence":"tool({ description: \"Find orders by id\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => ({ orderId, status: \"shipped\" }), })","snippet":"     1 | import { streamText, tool } from \"ai\";\n     2 | import { openai } from \"@ai-sdk/openai\";\n     3 | import { z } from \"zod\";\n     4 | \n>    5 | const searchOrders = tool({\n     6 |   description: \"Find orders by id\",\n     7 |   inputSchema: z.object({ orderId: z.string() }),\n     8 |   execute: async ({ orderId }) => ({ orderId, status: \"shipped\" }),\n     9 | });\n    10 | "},{"id":"tool:app/api/chat/route.ts:11:refundUser","file":"app/api/chat/route.ts","line":11,"agentId":"route:chat","name":"refundUser","description":"\"Refund an order\"","descriptionFull":"\"Refund an order\"","schema":"orderId","schemaFields":[{"name":"orderId","type":"z.string"}],"hasInputSchema":true,"hasExecute":true,"sideEffect":true,"evidence":"tool({ description: \"Refund an order\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => fetch('/api/refund', { method: \"POST\", body: orderId }), })","snippet":"     6 |   description: \"Find orders by id\",\n     7 |   inputSchema: z.object({ orderId: z.string() }),\n     8 |   execute: async ({ orderId }) => ({ orderId, status: \"shipped\" }),\n     9 | });\n    10 | \n>   11 | const refundUser = tool({\n    12 |   description: \"Refund an order\",\n    13 |   inputSchema: z.object({ orderId: z.string() }),\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \"POST\", body: orderId }),\n    15 | });\n    16 | "}],"chains":[{"id":"chain:app/agent-observe-skill/page.tsx:81:streamText","file":"app/agent-observe-skill/page.tsx","line":81,"agentId":"file:agent-observe-skill","type":"streamText","model":"openai(\\\"gpt-4.1-mini\\\"","modelFull":"openai(\\\"gpt-4.1-mini\\\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/agent-observe-skill/page.tsx:81:system:2"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/agent-observe-skill/page.tsx:170:searchOrders","tool:app/agent-observe-skill/page.tsx:125:refundUser"],"hasEval":true,"hasTrace":true,"evidence":"streamText({\\n 19 | model: openai(\\\"gpt-4.1-mini\\\"),\\n> 20 | system: 'You are a support agent. Be concise.',\\n 21 | tools: { searchOrders, refundUser },\\n 22 | });\\n 23 | return result.toDataStreamResponse();\\n 24 | }\\n 25 | \" } ], \"tools\": [ { \"id\": \"tool:ap...","snippet":"    76 |       \"kind\": \"system\",\n    77 |       \"inline\": true,\n    78 |       \"valueType\": \"inline literal\",\n    79 |       \"preview\": \"'You are a support agent. Be concise.'\",\n    80 |       \"text\": \"`You are a support agent. Be concise.`\",\n>   81 |       \"snippet\": \"    15 | });\\n    16 | \\n    17 | export async function POST() {\\n    18 |   const result = await streamText({\\n    19 |     model: openai(\\\"gpt-4.1-mini\\\"),\\n>   20 |     system: `You are a support agent. Be concise.`,\\n    21 |     tools: { searchOrders, refundUser },\\n    22 |   });\\n    23 |   return result.toDataStreamResponse();\\n    24 | }\\n    25 | \"\n    82 |     }\n    83 |   ],\n    84 |   \"tools\": [\n    85 |     {\n    86 |       \"id\": \"tool:app/api/chat/route.ts:5:searchOrders\","},{"id":"chain:app/agent-observe-skill/page.tsx:153:streamText","file":"app/agent-observe-skill/page.tsx","line":153,"agentId":"file:agent-observe-skill","type":"streamText","model":"openai(\\\"gpt-4.1-mini\\\"","modelFull":"openai(\\\"gpt-4.1-mini\\\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/agent-observe-skill/page.tsx:81:system:2"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/agent-observe-skill/page.tsx:170:searchOrders","tool:app/agent-observe-skill/page.tsx:125:refundUser"],"hasEval":true,"hasTrace":true,"evidence":"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\", \"snippet\": \" 13 | inputSchema: z.object({ orderId: z.string() }),\\n 14 | execute: async ({ orderId }) => fetch('/api/refund...","snippet":"   148 |         \"tool:app/api/chat/route.ts:5:searchOrders\",\n   149 |         \"tool:app/api/chat/route.ts:11:refundUser\"\n   150 |       ],\n   151 |       \"hasEval\": false,\n   152 |       \"hasTrace\": false,\n>  153 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n   154 |       \"snippet\": \"    13 |   inputSchema: z.object({ orderId: z.string() }),\\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \\\"POST\\\", body: orderId }),\\n    15 | });\\n    16 | \\n    17 | export async function POST() {\\n>   18 |   const result = await streamText({\\n    19 |     model: openai(\\\"gpt-4.1-mini\\\"),\\n    20 |     system: `You are a support agent. Be concise.`,\\n    21 |     tools: { searchOrders, refundUser },\\n    22 |   });\\n    23 |   return result.toDataStreamResponse();\"\n   155 |     }\n   156 |   ],\n   157 |   \"routes\": [\n   158 |     {"},{"id":"chain:app/agent-observe-skill/page.tsx:154:streamText","file":"app/agent-observe-skill/page.tsx","line":154,"agentId":"file:agent-observe-skill","type":"streamText","model":"openai(\\\"gpt-4.1-mini\\\"","modelFull":"openai(\\\"gpt-4.1-mini\\\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/agent-observe-skill/page.tsx:81:system:2"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/agent-observe-skill/page.tsx:170:searchOrders","tool:app/agent-observe-skill/page.tsx:125:refundUser"],"hasEval":true,"hasTrace":true,"evidence":"streamText({\\n 19 | model: openai(\\\"gpt-4.1-mini\\\"),\\n 20 | system: 'You are a support agent. Be concise.',\\n 21 | tools: { searchOrders, refundUser },\\n 22 | });\\n 23 | return result.toDataStreamResponse();\" } ], \"routes\": [ { \"id\": \"route:app/api/chat/route...","snippet":"   149 |         \"tool:app/api/chat/route.ts:11:refundUser\"\n   150 |       ],\n   151 |       \"hasEval\": false,\n   152 |       \"hasTrace\": false,\n   153 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n>  154 |       \"snippet\": \"    13 |   inputSchema: z.object({ orderId: z.string() }),\\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \\\"POST\\\", body: orderId }),\\n    15 | });\\n    16 | \\n    17 | export async function POST() {\\n>   18 |   const result = await streamText({\\n    19 |     model: openai(\\\"gpt-4.1-mini\\\"),\\n    20 |     system: `You are a support agent. Be concise.`,\\n    21 |     tools: { searchOrders, refundUser },\\n    22 |   });\\n    23 |   return result.toDataStreamResponse();\"\n   155 |     }\n   156 |   ],\n   157 |   \"routes\": [\n   158 |     {\n   159 |       \"id\": \"route:app/api/chat/route.ts:1\","},{"id":"chain:app/agent-observe-skill/page.tsx:207:streamText","file":"app/agent-observe-skill/page.tsx","line":207,"agentId":"file:agent-observe-skill","type":"streamText","model":"openai(\\\"gpt-4.1-mini\\\"","modelFull":"openai(\\\"gpt-4.1-mini\\\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/agent-observe-skill/page.tsx:81:system:2"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/agent-observe-skill/page.tsx:170:searchOrders","tool:app/agent-observe-skill/page.tsx:125:refundUser"],"hasEval":true,"hasTrace":true,"evidence":"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\", \"evidenceFull\": \"streamText({\\n model: openai(\\\"gpt-4.1-mini\\\"),\\n system: 'You are a support agent. Be concise.',\\n tools:...","snippet":"   202 |       \"kind\": \"missing-eval\",\n   203 |       \"severity\": \"medium\",\n   204 |       \"file\": \"app/api/chat/route.ts\",\n   205 |       \"line\": 18,\n   206 |       \"message\": \"streamText chain lacks nearby eval or test evidence.\",\n>  207 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n   208 |       \"evidenceFull\": \"streamText({\\n    model: openai(\\\"gpt-4.1-mini\\\"),\\n    system: `You are a support agent. Be concise.`,\\n    tools: { searchOrders, refundUser },\\n  })\",\n   209 |       \"fix\": \"Add promptfoo, vitest, or runtime evals near this chain.\",\n   210 |       \"targetId\": \"chain:app/api/chat/route.ts:18:streamText\",\n   211 |       \"agentId\": \"route:chat\"\n   212 |     },"},{"id":"chain:app/agent-observe-skill/page.tsx:208:streamText","file":"app/agent-observe-skill/page.tsx","line":208,"agentId":"file:agent-observe-skill","type":"streamText","model":"openai(\\\"gpt-4.1-mini\\\"","modelFull":"openai(\\\"gpt-4.1-mini\\\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/agent-observe-skill/page.tsx:81:system:2"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/agent-observe-skill/page.tsx:170:searchOrders","tool:app/agent-observe-skill/page.tsx:125:refundUser"],"hasEval":true,"hasTrace":true,"evidence":"streamText({\\n model: openai(\\\"gpt-4.1-mini\\\"),\\n system: 'You are a support agent. Be concise.',\\n tools: { searchOrders, refundUser },\\n })\", \"fix\": \"Add promptfoo, vitest, or runtime evals near this chain.\", \"targetId\": \"chain:app/api/chat/route.ts:18:stre...","snippet":"   203 |       \"severity\": \"medium\",\n   204 |       \"file\": \"app/api/chat/route.ts\",\n   205 |       \"line\": 18,\n   206 |       \"message\": \"streamText chain lacks nearby eval or test evidence.\",\n   207 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n>  208 |       \"evidenceFull\": \"streamText({\\n    model: openai(\\\"gpt-4.1-mini\\\"),\\n    system: `You are a support agent. Be concise.`,\\n    tools: { searchOrders, refundUser },\\n  })\",\n   209 |       \"fix\": \"Add promptfoo, vitest, or runtime evals near this chain.\",\n   210 |       \"targetId\": \"chain:app/api/chat/route.ts:18:streamText\",\n   211 |       \"agentId\": \"route:chat\"\n   212 |     },\n   213 |     {"},{"id":"chain:app/agent-observe-skill/page.tsx:220:streamText","file":"app/agent-observe-skill/page.tsx","line":220,"agentId":"file:agent-observe-skill","type":"streamText","model":"openai(\\\"gpt-4.1-mini\\\"","modelFull":"openai(\\\"gpt-4.1-mini\\\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/agent-observe-skill/page.tsx:81:system:2"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/agent-observe-skill/page.tsx:170:searchOrders","tool:app/agent-observe-skill/page.tsx:125:refundUser"],"hasEval":true,"hasTrace":true,"evidence":"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\", \"evidenceFull\": \"streamText({\\n model: openai(\\\"gpt-4.1-mini\\\"),\\n system: 'You are a support agent. Be concise.',\\n tools:...","snippet":"   215 |       \"kind\": \"missing-trace\",\n   216 |       \"severity\": \"high\",\n   217 |       \"file\": \"app/api/chat/route.ts\",\n   218 |       \"line\": 18,\n   219 |       \"message\": \"streamText chain lacks trace ID, structured logging, or AI SDK telemetry evidence.\",\n>  220 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n   221 |       \"evidenceFull\": \"streamText({\\n    model: openai(\\\"gpt-4.1-mini\\\"),\\n    system: `You are a support agent. Be concise.`,\\n    tools: { searchOrders, refundUser },\\n  })\",\n   222 |       \"fix\": \"Add traceId, structured logging, or AI SDK experimental_telemetry.\",\n   223 |       \"targetId\": \"chain:app/api/chat/route.ts:18:streamText\",\n   224 |       \"agentId\": \"route:chat\"\n   225 |     },"},{"id":"chain:app/agent-observe-skill/page.tsx:221:streamText","file":"app/agent-observe-skill/page.tsx","line":221,"agentId":"file:agent-observe-skill","type":"streamText","model":"openai(\\\"gpt-4.1-mini\\\"","modelFull":"openai(\\\"gpt-4.1-mini\\\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/agent-observe-skill/page.tsx:81:system:2"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/agent-observe-skill/page.tsx:170:searchOrders","tool:app/agent-observe-skill/page.tsx:125:refundUser"],"hasEval":true,"hasTrace":true,"evidence":"streamText({\\n model: openai(\\\"gpt-4.1-mini\\\"),\\n system: 'You are a support agent. Be concise.',\\n tools: { searchOrders, refundUser },\\n })\", \"fix\": \"Add traceId, structured logging, or AI SDK experimental_telemetry.\", \"targetId\": \"chain:app/api/chat/route....","snippet":"   216 |       \"severity\": \"high\",\n   217 |       \"file\": \"app/api/chat/route.ts\",\n   218 |       \"line\": 18,\n   219 |       \"message\": \"streamText chain lacks trace ID, structured logging, or AI SDK telemetry evidence.\",\n   220 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n>  221 |       \"evidenceFull\": \"streamText({\\n    model: openai(\\\"gpt-4.1-mini\\\"),\\n    system: `You are a support agent. Be concise.`,\\n    tools: { searchOrders, refundUser },\\n  })\",\n   222 |       \"fix\": \"Add traceId, structured logging, or AI SDK experimental_telemetry.\",\n   223 |       \"targetId\": \"chain:app/api/chat/route.ts:18:streamText\",\n   224 |       \"agentId\": \"route:chat\"\n   225 |     },\n   226 |     {"},{"id":"chain:app/api/chat/route.ts:18:streamText","file":"app/api/chat/route.ts","line":18,"agentId":"route:chat","type":"streamText","model":"openai(\"gpt-4.1-mini\"","modelFull":"openai(\"gpt-4.1-mini\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/api/chat/route.ts:20:system:13"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/api/chat/route.ts:5:searchOrders","tool:app/api/chat/route.ts:11:refundUser"],"hasEval":false,"hasTrace":false,"evidence":"streamText({ model: openai(\"gpt-4.1-mini\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })","snippet":"    13 |   inputSchema: z.object({ orderId: z.string() }),\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \"POST\", body: orderId }),\n    15 | });\n    16 | \n    17 | export async function POST() {\n>   18 |   const result = await streamText({\n    19 |     model: openai(\"gpt-4.1-mini\"),\n    20 |     system: `You are a support agent. Be concise.`,\n    21 |     tools: { searchOrders, refundUser },\n    22 |   });\n    23 |   return result.toDataStreamResponse();"}],"routes":[{"id":"route:app/api/chat/route.ts:1","file":"app/api/chat/route.ts","line":1,"kind":"app-router","methods":["POST"],"aiPatterns":["streamText"],"hasTrace":false,"snippet":">    1 | import { streamText, tool } from \"ai\";\n     2 | import { openai } from \"@ai-sdk/openai\";\n     3 | import { z } from \"zod\";\n     4 | \n     5 | const searchOrders = tool({\n     6 |   description: \"Find orders by id\",","agentId":"route:chat"}],"uiEntrypoints":[{"id":"ui:app/agent-observe-skill/page.tsx:181:useChat","file":"app/agent-observe-skill/page.tsx","line":181,"hook":"useChat","api":"\\\"/api/chat\\\" }","evidence":"useChat({ api: \\\"/api/chat\\\" })\", \"snippet\": \" 1 | \\\"use client\\\";\\n 2 | import { useChat } from \\\"ai/react\\\";\\n 3 | \\n 4 | export function Chat() {\\n> 5 | return useChat({ api: \\\"/api/chat\\\" });\\n 6 | }\\n 7 | \", \"agent...","snippet":"   176 |       \"id\": \"ui:components/chat.tsx:5:useChat\",\n   177 |       \"file\": \"components/chat.tsx\",\n   178 |       \"line\": 5,\n   179 |       \"hook\": \"useChat\",\n   180 |       \"api\": \"\\\"/api/chat\\\"\",\n>  181 |       \"evidence\": \"useChat({ api: \\\"/api/chat\\\" })\",\n   182 |       \"snippet\": \"     1 | \\\"use client\\\";\\n     2 | import { useChat } from \\\"ai/react\\\";\\n     3 | \\n     4 | export function Chat() {\\n>    5 |   return useChat({ api: \\\"/api/chat\\\" });\\n     6 | }\\n     7 | \",\n   183 |       \"agentId\": \"route:chat\"\n   184 |     }\n   185 |   ],\n   186 |   \"risks\": [","agentId":"route:chat"},{"id":"ui:app/agent-observe-skill/page.tsx:182:useChat","file":"app/agent-observe-skill/page.tsx","line":182,"hook":"useChat","api":"\\\"/api/chat\\\" }","evidence":"useChat({ api: \\\"/api/chat\\\" });\\n 6 | }\\n 7 | \", \"agentId\": \"route:chat\" } ], \"risks\": [ { \"id\": \"risk:app/api/chat/route.ts:20:inline-prompt:1\", \"kind\": \"inline-prompt\", \"severity\": \"medium\", \"file\": \"app/api/chat/rou...","snippet":"   177 |       \"file\": \"components/chat.tsx\",\n   178 |       \"line\": 5,\n   179 |       \"hook\": \"useChat\",\n   180 |       \"api\": \"\\\"/api/chat\\\"\",\n   181 |       \"evidence\": \"useChat({ api: \\\"/api/chat\\\" })\",\n>  182 |       \"snippet\": \"     1 | \\\"use client\\\";\\n     2 | import { useChat } from \\\"ai/react\\\";\\n     3 | \\n     4 | export function Chat() {\\n>    5 |   return useChat({ api: \\\"/api/chat\\\" });\\n     6 | }\\n     7 | \",\n   183 |       \"agentId\": \"route:chat\"\n   184 |     }\n   185 |   ],\n   186 |   \"risks\": [\n   187 |     {","agentId":"route:chat"},{"id":"ui:components/chat.tsx:5:useChat","file":"components/chat.tsx","line":5,"hook":"useChat","api":"\"/api/chat\"","evidence":"useChat({ api: \"/api/chat\" })","snippet":"     1 | \"use client\";\n     2 | import { useChat } from \"ai/react\";\n     3 | \n     4 | export function Chat() {\n>    5 |   return useChat({ api: \"/api/chat\" });\n     6 | }\n     7 | ","agentId":"route:chat"}],"modelCalls":[{"id":"chain:app/agent-observe-skill/page.tsx:81:streamText","file":"app/agent-observe-skill/page.tsx","line":81,"agentId":"file:agent-observe-skill","type":"streamText","model":"openai(\\\"gpt-4.1-mini\\\"","modelFull":"openai(\\\"gpt-4.1-mini\\\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/agent-observe-skill/page.tsx:81:system:2"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/agent-observe-skill/page.tsx:170:searchOrders","tool:app/agent-observe-skill/page.tsx:125:refundUser"],"hasEval":true,"hasTrace":true,"evidence":"streamText({\\n 19 | model: openai(\\\"gpt-4.1-mini\\\"),\\n> 20 | system: 'You are a support agent. Be concise.',\\n 21 | tools: { searchOrders, refundUser },\\n 22 | });\\n 23 | return result.toDataStreamResponse();\\n 24 | }\\n 25 | \" } ], \"tools\": [ { \"id\": \"tool:ap...","snippet":"    76 |       \"kind\": \"system\",\n    77 |       \"inline\": true,\n    78 |       \"valueType\": \"inline literal\",\n    79 |       \"preview\": \"'You are a support agent. Be concise.'\",\n    80 |       \"text\": \"`You are a support agent. Be concise.`\",\n>   81 |       \"snippet\": \"    15 | });\\n    16 | \\n    17 | export async function POST() {\\n    18 |   const result = await streamText({\\n    19 |     model: openai(\\\"gpt-4.1-mini\\\"),\\n>   20 |     system: `You are a support agent. Be concise.`,\\n    21 |     tools: { searchOrders, refundUser },\\n    22 |   });\\n    23 |   return result.toDataStreamResponse();\\n    24 | }\\n    25 | \"\n    82 |     }\n    83 |   ],\n    84 |   \"tools\": [\n    85 |     {\n    86 |       \"id\": \"tool:app/api/chat/route.ts:5:searchOrders\","},{"id":"chain:app/agent-observe-skill/page.tsx:153:streamText","file":"app/agent-observe-skill/page.tsx","line":153,"agentId":"file:agent-observe-skill","type":"streamText","model":"openai(\\\"gpt-4.1-mini\\\"","modelFull":"openai(\\\"gpt-4.1-mini\\\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/agent-observe-skill/page.tsx:81:system:2"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/agent-observe-skill/page.tsx:170:searchOrders","tool:app/agent-observe-skill/page.tsx:125:refundUser"],"hasEval":true,"hasTrace":true,"evidence":"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\", \"snippet\": \" 13 | inputSchema: z.object({ orderId: z.string() }),\\n 14 | execute: async ({ orderId }) => fetch('/api/refund...","snippet":"   148 |         \"tool:app/api/chat/route.ts:5:searchOrders\",\n   149 |         \"tool:app/api/chat/route.ts:11:refundUser\"\n   150 |       ],\n   151 |       \"hasEval\": false,\n   152 |       \"hasTrace\": false,\n>  153 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n   154 |       \"snippet\": \"    13 |   inputSchema: z.object({ orderId: z.string() }),\\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \\\"POST\\\", body: orderId }),\\n    15 | });\\n    16 | \\n    17 | export async function POST() {\\n>   18 |   const result = await streamText({\\n    19 |     model: openai(\\\"gpt-4.1-mini\\\"),\\n    20 |     system: `You are a support agent. Be concise.`,\\n    21 |     tools: { searchOrders, refundUser },\\n    22 |   });\\n    23 |   return result.toDataStreamResponse();\"\n   155 |     }\n   156 |   ],\n   157 |   \"routes\": [\n   158 |     {"},{"id":"chain:app/agent-observe-skill/page.tsx:154:streamText","file":"app/agent-observe-skill/page.tsx","line":154,"agentId":"file:agent-observe-skill","type":"streamText","model":"openai(\\\"gpt-4.1-mini\\\"","modelFull":"openai(\\\"gpt-4.1-mini\\\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/agent-observe-skill/page.tsx:81:system:2"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/agent-observe-skill/page.tsx:170:searchOrders","tool:app/agent-observe-skill/page.tsx:125:refundUser"],"hasEval":true,"hasTrace":true,"evidence":"streamText({\\n 19 | model: openai(\\\"gpt-4.1-mini\\\"),\\n 20 | system: 'You are a support agent. Be concise.',\\n 21 | tools: { searchOrders, refundUser },\\n 22 | });\\n 23 | return result.toDataStreamResponse();\" } ], \"routes\": [ { \"id\": \"route:app/api/chat/route...","snippet":"   149 |         \"tool:app/api/chat/route.ts:11:refundUser\"\n   150 |       ],\n   151 |       \"hasEval\": false,\n   152 |       \"hasTrace\": false,\n   153 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n>  154 |       \"snippet\": \"    13 |   inputSchema: z.object({ orderId: z.string() }),\\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \\\"POST\\\", body: orderId }),\\n    15 | });\\n    16 | \\n    17 | export async function POST() {\\n>   18 |   const result = await streamText({\\n    19 |     model: openai(\\\"gpt-4.1-mini\\\"),\\n    20 |     system: `You are a support agent. Be concise.`,\\n    21 |     tools: { searchOrders, refundUser },\\n    22 |   });\\n    23 |   return result.toDataStreamResponse();\"\n   155 |     }\n   156 |   ],\n   157 |   \"routes\": [\n   158 |     {\n   159 |       \"id\": \"route:app/api/chat/route.ts:1\","},{"id":"chain:app/agent-observe-skill/page.tsx:207:streamText","file":"app/agent-observe-skill/page.tsx","line":207,"agentId":"file:agent-observe-skill","type":"streamText","model":"openai(\\\"gpt-4.1-mini\\\"","modelFull":"openai(\\\"gpt-4.1-mini\\\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/agent-observe-skill/page.tsx:81:system:2"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/agent-observe-skill/page.tsx:170:searchOrders","tool:app/agent-observe-skill/page.tsx:125:refundUser"],"hasEval":true,"hasTrace":true,"evidence":"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\", \"evidenceFull\": \"streamText({\\n model: openai(\\\"gpt-4.1-mini\\\"),\\n system: 'You are a support agent. Be concise.',\\n tools:...","snippet":"   202 |       \"kind\": \"missing-eval\",\n   203 |       \"severity\": \"medium\",\n   204 |       \"file\": \"app/api/chat/route.ts\",\n   205 |       \"line\": 18,\n   206 |       \"message\": \"streamText chain lacks nearby eval or test evidence.\",\n>  207 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n   208 |       \"evidenceFull\": \"streamText({\\n    model: openai(\\\"gpt-4.1-mini\\\"),\\n    system: `You are a support agent. Be concise.`,\\n    tools: { searchOrders, refundUser },\\n  })\",\n   209 |       \"fix\": \"Add promptfoo, vitest, or runtime evals near this chain.\",\n   210 |       \"targetId\": \"chain:app/api/chat/route.ts:18:streamText\",\n   211 |       \"agentId\": \"route:chat\"\n   212 |     },"},{"id":"chain:app/agent-observe-skill/page.tsx:208:streamText","file":"app/agent-observe-skill/page.tsx","line":208,"agentId":"file:agent-observe-skill","type":"streamText","model":"openai(\\\"gpt-4.1-mini\\\"","modelFull":"openai(\\\"gpt-4.1-mini\\\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/agent-observe-skill/page.tsx:81:system:2"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/agent-observe-skill/page.tsx:170:searchOrders","tool:app/agent-observe-skill/page.tsx:125:refundUser"],"hasEval":true,"hasTrace":true,"evidence":"streamText({\\n model: openai(\\\"gpt-4.1-mini\\\"),\\n system: 'You are a support agent. Be concise.',\\n tools: { searchOrders, refundUser },\\n })\", \"fix\": \"Add promptfoo, vitest, or runtime evals near this chain.\", \"targetId\": \"chain:app/api/chat/route.ts:18:stre...","snippet":"   203 |       \"severity\": \"medium\",\n   204 |       \"file\": \"app/api/chat/route.ts\",\n   205 |       \"line\": 18,\n   206 |       \"message\": \"streamText chain lacks nearby eval or test evidence.\",\n   207 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n>  208 |       \"evidenceFull\": \"streamText({\\n    model: openai(\\\"gpt-4.1-mini\\\"),\\n    system: `You are a support agent. Be concise.`,\\n    tools: { searchOrders, refundUser },\\n  })\",\n   209 |       \"fix\": \"Add promptfoo, vitest, or runtime evals near this chain.\",\n   210 |       \"targetId\": \"chain:app/api/chat/route.ts:18:streamText\",\n   211 |       \"agentId\": \"route:chat\"\n   212 |     },\n   213 |     {"},{"id":"chain:app/agent-observe-skill/page.tsx:220:streamText","file":"app/agent-observe-skill/page.tsx","line":220,"agentId":"file:agent-observe-skill","type":"streamText","model":"openai(\\\"gpt-4.1-mini\\\"","modelFull":"openai(\\\"gpt-4.1-mini\\\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/agent-observe-skill/page.tsx:81:system:2"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/agent-observe-skill/page.tsx:170:searchOrders","tool:app/agent-observe-skill/page.tsx:125:refundUser"],"hasEval":true,"hasTrace":true,"evidence":"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\", \"evidenceFull\": \"streamText({\\n model: openai(\\\"gpt-4.1-mini\\\"),\\n system: 'You are a support agent. Be concise.',\\n tools:...","snippet":"   215 |       \"kind\": \"missing-trace\",\n   216 |       \"severity\": \"high\",\n   217 |       \"file\": \"app/api/chat/route.ts\",\n   218 |       \"line\": 18,\n   219 |       \"message\": \"streamText chain lacks trace ID, structured logging, or AI SDK telemetry evidence.\",\n>  220 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n   221 |       \"evidenceFull\": \"streamText({\\n    model: openai(\\\"gpt-4.1-mini\\\"),\\n    system: `You are a support agent. Be concise.`,\\n    tools: { searchOrders, refundUser },\\n  })\",\n   222 |       \"fix\": \"Add traceId, structured logging, or AI SDK experimental_telemetry.\",\n   223 |       \"targetId\": \"chain:app/api/chat/route.ts:18:streamText\",\n   224 |       \"agentId\": \"route:chat\"\n   225 |     },"},{"id":"chain:app/agent-observe-skill/page.tsx:221:streamText","file":"app/agent-observe-skill/page.tsx","line":221,"agentId":"file:agent-observe-skill","type":"streamText","model":"openai(\\\"gpt-4.1-mini\\\"","modelFull":"openai(\\\"gpt-4.1-mini\\\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/agent-observe-skill/page.tsx:81:system:2"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/agent-observe-skill/page.tsx:170:searchOrders","tool:app/agent-observe-skill/page.tsx:125:refundUser"],"hasEval":true,"hasTrace":true,"evidence":"streamText({\\n model: openai(\\\"gpt-4.1-mini\\\"),\\n system: 'You are a support agent. Be concise.',\\n tools: { searchOrders, refundUser },\\n })\", \"fix\": \"Add traceId, structured logging, or AI SDK experimental_telemetry.\", \"targetId\": \"chain:app/api/chat/route....","snippet":"   216 |       \"severity\": \"high\",\n   217 |       \"file\": \"app/api/chat/route.ts\",\n   218 |       \"line\": 18,\n   219 |       \"message\": \"streamText chain lacks trace ID, structured logging, or AI SDK telemetry evidence.\",\n   220 |       \"evidence\": \"streamText({ model: openai(\\\"gpt-4.1-mini\\\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })\",\n>  221 |       \"evidenceFull\": \"streamText({\\n    model: openai(\\\"gpt-4.1-mini\\\"),\\n    system: `You are a support agent. Be concise.`,\\n    tools: { searchOrders, refundUser },\\n  })\",\n   222 |       \"fix\": \"Add traceId, structured logging, or AI SDK experimental_telemetry.\",\n   223 |       \"targetId\": \"chain:app/api/chat/route.ts:18:streamText\",\n   224 |       \"agentId\": \"route:chat\"\n   225 |     },\n   226 |     {"},{"id":"chain:app/api/chat/route.ts:18:streamText","file":"app/api/chat/route.ts","line":18,"agentId":"route:chat","type":"streamText","model":"openai(\"gpt-4.1-mini\"","modelFull":"openai(\"gpt-4.1-mini\"","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":["prompt:app/api/chat/route.ts:20:system:13"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/api/chat/route.ts:5:searchOrders","tool:app/api/chat/route.ts:11:refundUser"],"hasEval":false,"hasTrace":false,"evidence":"streamText({ model: openai(\"gpt-4.1-mini\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })","snippet":"    13 |   inputSchema: z.object({ orderId: z.string() }),\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \"POST\", body: orderId }),\n    15 | });\n    16 | \n    17 | export async function POST() {\n>   18 |   const result = await streamText({\n    19 |     model: openai(\"gpt-4.1-mini\"),\n    20 |     system: `You are a support agent. Be concise.`,\n    21 |     tools: { searchOrders, refundUser },\n    22 |   });\n    23 |   return result.toDataStreamResponse();"}],"risks":[{"id":"risk:app/agent-observe-skill/page.tsx:81:inline-prompt:1","kind":"inline-prompt","severity":"medium","file":"app/agent-observe-skill/page.tsx","line":81,"message":"Prompt is inline and harder to audit, diff, reuse, or cover with evals.","evidence":"'You are a support agent. Be concise.'","evidenceFull":"'You are a support agent. Be concise.'","fix":"Extract the prompt to a named constant or dedicated file, then add eval coverage.","targetId":"prompt:app/agent-observe-skill/page.tsx:81:system:2","agentId":"file:agent-observe-skill"},{"id":"risk:app/agent-observe-skill/page.tsx:138:inline-prompt:2","kind":"inline-prompt","severity":"medium","file":"app/agent-observe-skill/page.tsx","line":138,"message":"Prompt is inline and harder to audit, diff, reuse, or cover with evals.","evidence":"'You are a support agent. Be concise.'","evidenceFull":"'You are a support agent. Be concise.'","fix":"Extract the prompt to a named constant or dedicated file, then add eval coverage.","targetId":"prompt:app/agent-observe-skill/page.tsx:138:system:3","agentId":"file:agent-observe-skill"},{"id":"risk:app/agent-observe-skill/page.tsx:153:inline-prompt:3","kind":"inline-prompt","severity":"medium","file":"app/agent-observe-skill/page.tsx","line":153,"message":"Prompt is inline and harder to audit, diff, reuse, or cover with evals.","evidence":"'You are a support agent. Be concise.'","evidenceFull":"'You are a support agent. Be concise.'","fix":"Extract the prompt to a named constant or dedicated file, then add eval coverage.","targetId":"prompt:app/agent-observe-skill/page.tsx:153:system:5","agentId":"file:agent-observe-skill"},{"id":"risk:app/agent-observe-skill/page.tsx:154:inline-prompt:4","kind":"inline-prompt","severity":"medium","file":"app/agent-observe-skill/page.tsx","line":154,"message":"Prompt is inline and harder to audit, diff, reuse, or cover with evals.","evidence":"'You are a support agent. Be concise.'","evidenceFull":"'You are a support agent. Be concise.'","fix":"Extract the prompt to a named constant or dedicated file, then add eval coverage.","targetId":"prompt:app/agent-observe-skill/page.tsx:154:system:6","agentId":"file:agent-observe-skill"},{"id":"risk:app/agent-observe-skill/page.tsx:207:inline-prompt:5","kind":"inline-prompt","severity":"medium","file":"app/agent-observe-skill/page.tsx","line":207,"message":"Prompt is inline and harder to audit, diff, reuse, or cover with evals.","evidence":"'You are a support agent. Be concise.'","evidenceFull":"'You are a support agent. Be concise.'","fix":"Extract the prompt to a named constant or dedicated file, then add eval coverage.","targetId":"prompt:app/agent-observe-skill/page.tsx:207:system:8","agentId":"file:agent-observe-skill"},{"id":"risk:app/agent-observe-skill/page.tsx:208:inline-prompt:6","kind":"inline-prompt","severity":"medium","file":"app/agent-observe-skill/page.tsx","line":208,"message":"Prompt is inline and harder to audit, diff, reuse, or cover with evals.","evidence":"'You are a support agent. Be concise.'","evidenceFull":"'You are a support agent. Be concise.'","fix":"Extract the prompt to a named constant or dedicated file, then add eval coverage.","targetId":"prompt:app/agent-observe-skill/page.tsx:208:system:9","agentId":"file:agent-observe-skill"},{"id":"risk:app/agent-observe-skill/page.tsx:220:inline-prompt:7","kind":"inline-prompt","severity":"medium","file":"app/agent-observe-skill/page.tsx","line":220,"message":"Prompt is inline and harder to audit, diff, reuse, or cover with evals.","evidence":"'You are a support agent. Be concise.'","evidenceFull":"'You are a support agent. Be concise.'","fix":"Extract the prompt to a named constant or dedicated file, then add eval coverage.","targetId":"prompt:app/agent-observe-skill/page.tsx:220:system:10","agentId":"file:agent-observe-skill"},{"id":"risk:app/agent-observe-skill/page.tsx:221:inline-prompt:8","kind":"inline-prompt","severity":"medium","file":"app/agent-observe-skill/page.tsx","line":221,"message":"Prompt is inline and harder to audit, diff, reuse, or cover with evals.","evidence":"'You are a support agent. Be concise.'","evidenceFull":"'You are a support agent. Be concise.'","fix":"Extract the prompt to a named constant or dedicated file, then add eval coverage.","targetId":"prompt:app/agent-observe-skill/page.tsx:221:system:11","agentId":"file:agent-observe-skill"},{"id":"risk:app/agent-observe-skill/page.tsx:103:side-effect-tool:9","kind":"side-effect-tool","severity":"high","file":"app/agent-observe-skill/page.tsx","line":103,"message":"Tool tool_1 appears to perform side effects and should have trace IDs, authorization checks, and tests.","evidence":"tool({ description: \\\"Find orders by id\\\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => ({ orderId, status: \\\"shipped\\\" }), })\", \"snippet\": \" 1 | import { streamText, tool } from \\\"ai\\...","evidenceFull":"tool({ description: \\\"Find orders by id\\\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => ({ orderId, status: \\\"shipped\\\" }), })\", \"snippet\": \" 1 | import { streamText, tool } from \\\"ai\\\";\\n 2 | import { op...","fix":"Add trace IDs, authorization checks, and integration tests for this tool's execute handler.","targetId":"tool:app/agent-observe-skill/page.tsx:103:tool_1","agentId":"file:agent-observe-skill"},{"id":"risk:app/agent-observe-skill/page.tsx:104:side-effect-tool:10","kind":"side-effect-tool","severity":"high","file":"app/agent-observe-skill/page.tsx","line":104,"message":"Tool searchOrders appears to perform side effects and should have trace IDs, authorization checks, and tests.","evidence":"tool({\\n 6 | description: \\\"Find orders by id\\\",\\n 7 | inputSchema: z.object({ orderId: z.string() }),\\n 8 | execute: async ({ orderId }) => ({ orderId, status: \\\"shipped\\\" }),\\n 9 | });\\n 10 | \" }, { \"id\": \"tool:app/ap...","evidenceFull":"tool({\\n 6 | description: \\\"Find orders by id\\\",\\n 7 | inputSchema: z.object({ orderId: z.string() }),\\n 8 | execute: async ({ orderId }) => ({ orderId, status: \\\"shipped\\\" }),\\n 9 | });\\n 10 | \" }, { \"id\": \"tool:app/api/chat/route.ts:11:r...","fix":"Add trace IDs, authorization checks, and integration tests for this tool's execute handler.","targetId":"tool:app/agent-observe-skill/page.tsx:104:searchOrders","agentId":"file:agent-observe-skill"},{"id":"risk:app/agent-observe-skill/page.tsx:124:side-effect-tool:11","kind":"side-effect-tool","severity":"high","file":"app/agent-observe-skill/page.tsx","line":124,"message":"Tool tool_3 appears to perform side effects and should have trace IDs, authorization checks, and tests.","evidence":"tool({ description: \\\"Refund an order\\\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => fetch('/api/refund', { method: \\\"POST\\\", body: orderId }), })\", \"snippet\": \" 6 | description: \\\"Fi...","evidenceFull":"tool({ description: \\\"Refund an order\\\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => fetch('/api/refund', { method: \\\"POST\\\", body: orderId }), })\", \"snippet\": \" 6 | description: \\\"Find orders by id\\\",\\n...","fix":"Add trace IDs, authorization checks, and integration tests for this tool's execute handler.","targetId":"tool:app/agent-observe-skill/page.tsx:124:tool_3","agentId":"file:agent-observe-skill"},{"id":"risk:app/agent-observe-skill/page.tsx:125:side-effect-tool:12","kind":"side-effect-tool","severity":"high","file":"app/agent-observe-skill/page.tsx","line":125,"message":"Tool refundUser appears to perform side effects and should have trace IDs, authorization checks, and tests.","evidence":"tool({\\n 12 | description: \\\"Refund an order\\\",\\n 13 | inputSchema: z.object({ orderId: z.string() }),\\n 14 | execute: async ({ orderId }) => fetch('/api/refund', { method: \\\"POST\\\", body: orderId }),\\n 15 | });\\n 16 | ...","evidenceFull":"tool({\\n 12 | description: \\\"Refund an order\\\",\\n 13 | inputSchema: z.object({ orderId: z.string() }),\\n 14 | execute: async ({ orderId }) => fetch('/api/refund', { method: \\\"POST\\\", body: orderId }),\\n 15 | });\\n 16 | \" } ], \"chains\": [ {...","fix":"Add trace IDs, authorization checks, and integration tests for this tool's execute handler.","targetId":"tool:app/agent-observe-skill/page.tsx:125:refundUser","agentId":"file:agent-observe-skill"},{"id":"risk:app/api/chat/route.ts:20:inline-prompt:13","kind":"inline-prompt","severity":"medium","file":"app/api/chat/route.ts","line":20,"message":"Prompt is inline and harder to audit, diff, reuse, or cover with evals.","evidence":"'You are a support agent. Be concise.'","evidenceFull":"'You are a support agent. Be concise.'","fix":"Extract the prompt to a named constant or dedicated file, then add eval coverage.","targetId":"prompt:app/api/chat/route.ts:20:system:13","agentId":"route:chat"},{"id":"risk:app/api/chat/route.ts:11:side-effect-tool:14","kind":"side-effect-tool","severity":"high","file":"app/api/chat/route.ts","line":11,"message":"Tool refundUser appears to perform side effects and should have trace IDs, authorization checks, and tests.","evidence":"tool({ description: \"Refund an order\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => fetch('/api/refund', { method: \"POST\", body: orderId }), })","evidenceFull":"tool({ description: \"Refund an order\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => fetch('/api/refund', { method: \"POST\", body: orderId }), })","fix":"Add trace IDs, authorization checks, and integration tests for this tool's execute handler.","targetId":"tool:app/api/chat/route.ts:11:refundUser","agentId":"route:chat"},{"id":"risk:app/api/chat/route.ts:18:missing-eval:15","kind":"missing-eval","severity":"medium","file":"app/api/chat/route.ts","line":18,"message":"streamText chain lacks nearby eval or test evidence.","evidence":"streamText({ model: openai(\"gpt-4.1-mini\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })","evidenceFull":"streamText({\n    model: openai(\"gpt-4.1-mini\"),\n    system: `You are a support agent. Be concise.`,\n    tools: { searchOrders, refundUser },\n  })","fix":"Add promptfoo, vitest, or runtime evals near this chain.","targetId":"chain:app/api/chat/route.ts:18:streamText","agentId":"route:chat"},{"id":"risk:app/api/chat/route.ts:18:missing-trace:16","kind":"missing-trace","severity":"high","file":"app/api/chat/route.ts","line":18,"message":"streamText chain lacks trace ID, structured logging, or AI SDK telemetry evidence.","evidence":"streamText({ model: openai(\"gpt-4.1-mini\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })","evidenceFull":"streamText({\n    model: openai(\"gpt-4.1-mini\"),\n    system: `You are a support agent. Be concise.`,\n    tools: { searchOrders, refundUser },\n  })","fix":"Add traceId, structured logging, or AI SDK experimental_telemetry.","targetId":"chain:app/api/chat/route.ts:18:streamText","agentId":"route:chat"},{"id":"risk:app/api/chat/route.ts:1:route-without-trace:17","kind":"route-without-trace","severity":"high","file":"app/api/chat/route.ts","line":1,"message":"AI route app/api/chat/route.ts exposes streamText without trace evidence.","evidence":"streamText","evidenceFull":"streamText","fix":"Instrument this API route with trace metadata before model calls return.","targetId":"route:app/api/chat/route.ts:1","agentId":"route:chat"}]};// Embedded into renderSimpleHtmlReport — client-side only (no Node).
+const PHASE_META = {
+  entry: { label: "Entry", tone: "info" },
+  route: { label: "Route", tone: "info" },
+  prompt: { label: "Prompt", tone: "low" },
+  model: { label: "Model", tone: "info" },
+  tool: { label: "Tool", tone: "ok" },
+  "side-effect": { label: "Action", tone: "high" },
+  output: { label: "Output", tone: "ok" },
+  empty: { label: "—", tone: "low" },
+};
 
-      * {
-        box-sizing: border-box;
-      }
+const state = {
+  agentId: (trace.agents || [])[0]?.id || "",
+  selectedId: "",
+  kind: "",
+};
 
-      body {
-        margin: 0;
-        background: var(--bg);
-        color: var(--ink);
-      }
+const escapeHtml = (value) =>
+  String(value ?? "").replace(/[&<>"']/g, (char) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char],
+  );
 
-      .toolbar {
-        display: flex;
-        justify-content: space-between;
-        gap: 16px;
-        align-items: center;
-        border-bottom: 1px solid var(--line);
-        padding: 14px clamp(16px, 3vw, 34px);
-        background: rgba(247, 248, 245, 0.95);
-      }
+const byAgent = (items) => (items || []).filter((item) => item.agentId === state.agentId);
+const currentAgent = () => (trace.agents || []).find((agent) => agent.id === state.agentId) || null;
 
-      .brand {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px 14px;
-        align-items: baseline;
-      }
+function agentButtonClass(active) {
+  return [
+    "rounded-lg border px-3 py-1.5 text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-gray-200 whitespace-nowrap",
+    active
+      ? "border-blue-600 text-blue-600 bg-blue-50"
+      : "border-gray-200 text-gray-700 bg-white hover:border-gray-300 hover:bg-gray-50",
+  ].join(" ");
+}
 
-      .brand span {
-        color: var(--muted);
-        font-size: 13px;
-      }
+function badge(text, tone) {
+  const tones = {
+    high: "bg-red-50 text-red-700 border-red-200",
+    medium: "bg-amber-50 text-amber-800 border-amber-200",
+    low: "bg-gray-50 text-gray-600 border-gray-200",
+    info: "bg-blue-50 text-blue-700 border-blue-200",
+    ok: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  };
+  return (
+    '<span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ' +
+    (tones[tone] || tones.low) +
+    '">' +
+    escapeHtml(text) +
+    "</span>"
+  );
+}
 
-      main {
-        width: min(1040px, calc(100vw - 32px));
-        margin: 0 auto;
-        padding: 22px 0 40px;
-        display: grid;
-        gap: 18px;
-      }
+function flowStepsForAgent(agentId) {
+  if (trace.flows && trace.flows[agentId]) return trace.flows[agentId];
+  return [];
+}
 
-      .hero {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
-        gap: 18px;
-        align-items: center;
-      }
+function findItem(kind, id) {
+  if (!kind || !id || id.endsWith(":output")) return null;
+  const key =
+    kind === "entrypoints"
+      ? "uiEntrypoints"
+      : kind === "chains"
+        ? "chains"
+        : kind === "routes"
+          ? "routes"
+          : kind === "tools"
+            ? "tools"
+            : kind === "prompts"
+              ? "prompts"
+              : kind;
+  return (trace[key] || []).find((item) => item.id === id) || null;
+}
 
-      h1 {
-        margin: 0;
-        max-width: 620px;
-        font-size: clamp(30px, 4.5vw, 52px);
-        line-height: 1;
-        letter-spacing: 0;
-      }
+function phaseAccent(phase) {
+  const map = {
+    entry: "bg-sky-500",
+    route: "bg-indigo-500",
+    prompt: "bg-violet-500",
+    model: "bg-blue-600",
+    tool: "bg-emerald-500",
+    "side-effect": "bg-rose-500",
+    output: "bg-gray-800",
+    empty: "bg-gray-300",
+  };
+  return map[phase] || "bg-gray-400";
+}
 
-      h2 {
-        margin: 0 0 12px;
-        font-size: 18px;
-        letter-spacing: 0;
-      }
+function flowCardClass(active, nested) {
+  return [
+    "flow-card w-full text-left rounded-lg border transition-all",
+    "focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200 focus-visible:ring-offset-1",
+    nested ? "border-gray-200/90 bg-gray-50/80" : "border-gray-200 bg-white shadow-sm",
+    active ? "!border-blue-500 ring-2 ring-blue-100" : "hover:border-gray-300 hover:shadow",
+  ].join(" ");
+}
 
-      p {
-        margin: 0;
-        color: var(--muted);
-        line-height: 1.45;
-      }
+function flowStepMarker(step, active) {
+  if (step.nested) {
+    return (
+      '<div class="mt-3 flex h-2 w-2 shrink-0 rounded-full ' +
+      (active ? "bg-blue-600" : "bg-gray-300") +
+      '" aria-hidden="true"></div>'
+    );
+  }
+  return (
+    '<div class="mt-2.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold tabular-nums ' +
+    (active ? "bg-blue-600 text-white shadow-sm" : "border border-gray-300 bg-white text-gray-600") +
+    '">' +
+    escapeHtml(String(step.order)) +
+    "</div>"
+  );
+}
 
-      code {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      }
+function section(title, body) {
+  return (
+    '<div class="grid gap-2"><h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">' +
+    escapeHtml(title) +
+    '</h3><div class="text-[15px] text-gray-800">' +
+    body +
+    "</div></div>"
+  );
+}
 
-      .trust {
-        border-left: 3px solid var(--green);
-        padding-left: 12px;
-        font-size: 14px;
-      }
+function preBlock(text) {
+  return (
+    '<pre class="mt-2 max-h-64 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-gray-800 whitespace-pre-wrap break-words">' +
+    escapeHtml(text || "") +
+    "</pre>"
+  );
+}
 
-      section {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--panel);
-        padding: 18px;
-        box-shadow: var(--shadow);
-      }
+function editorHref(item) {
+  const root = (trace.root || "").replace(/\\/g, "/");
+  const file = (item.file || "").replace(/\\/g, "/");
+  return "vscode://file/" + root + "/" + file + ":" + item.line;
+}
 
-      .install-panel {
-        display: grid;
-        gap: 10px;
-      }
+function locBar(item) {
+  const loc = item.file + ":" + item.line;
+  return (
+    '<div class="flex flex-wrap items-center gap-2 text-sm">' +
+    '<code class="font-mono text-xs text-gray-600">' +
+    escapeHtml(loc) +
+    "</code>" +
+    '<a class="text-xs font-medium text-blue-600 hover:underline" href="' +
+    escapeHtml(editorHref(item)) +
+    '">Open in editor</a>' +
+    '<button type="button" class="copy-path text-xs font-medium text-gray-500 hover:text-gray-900" data-copy="' +
+    escapeHtml(loc) +
+    '">Copy path</button>' +
+    "</div>"
+  );
+}
 
-      .install-command {
-        display: block;
-        border: 1px solid var(--line);
-        border-radius: 7px;
-        background: #fbfcf9;
-        padding: 12px;
-        color: var(--ink);
-        overflow-wrap: anywhere;
-      }
+function renderOutputDetail(step, chain) {
+  return (
+    '<div class="grid gap-4">' +
+    '<h2 class="text-lg font-semibold text-gray-900">' +
+    escapeHtml(step.title) +
+    "</h2>" +
+    '<p class="text-[15px] text-gray-700">' +
+    escapeHtml(step.subtitle) +
+    "</p>" +
+    '<p class="text-sm text-gray-500">' +
+    escapeHtml(step.note) +
+    "</p>" +
+    (chain
+      ? section("Source", preBlock(chain.snippet)) +
+        locBar(chain) +
+        '<p class="text-xs text-gray-400 mt-2">In the UI, streamed tokens appear in the chat component; non-stream responses render as a single message or JSON payload.</p>'
+      : "") +
+    "</div>"
+  );
+}
 
-      .summary {
-        display: grid;
-        grid-template-columns: repeat(6, minmax(100px, 1fr));
-        gap: 10px;
-      }
+function renderDetail(item, kind, step) {
+  if (step && step.phase === "output") {
+    const chainId = step.id.replace(/:output$/, "");
+    const chain = (trace.chains || []).find((c) => c.id === chainId);
+    return renderOutputDetail(step, chain);
+  }
+  if (!item) {
+    if (step && step.phase === "empty") {
+      return '<p class="text-[15px] text-gray-500">' + escapeHtml(step.subtitle) + "</p>";
+    }
+    return '<p class="text-[15px] text-gray-500">Select a step in the flow to inspect it.</p>';
+  }
 
-      .metric {
-        border: 1px solid var(--line);
-        border-radius: 7px;
-        background: #fbfcf9;
-        padding: 14px;
-        text-align: center;
-      }
+  const badges = [];
+  if (kind === "tools" && item.sideEffect) badges.push(badge("side effect", "high"));
+  if (kind === "prompts" && item.inline) badges.push(badge("inline", "medium"));
+  if (kind === "chains") {
+    if (!item.hasEval) badges.push(badge("no eval", "medium"));
+    if (!item.hasTrace) badges.push(badge("no trace", "high"));
+    else badges.push(badge("trace ok", "ok"));
+  }
 
-      .metric strong {
-        display: block;
-        font-size: 30px;
-      }
+  let body = "";
+  if (kind === "prompts") {
+    body =
+      section("Prompt text", preBlock(item.text || item.preview)) + section("Source context", preBlock(item.snippet));
+  } else if (kind === "tools") {
+    const schemaRows = (item.schemaFields || [])
+      .map(
+        (f) =>
+          '<tr class="border-t border-gray-100"><td class="py-2 pr-4 font-mono text-xs">' +
+          escapeHtml(f.name) +
+          '</td><td class="py-2 font-mono text-xs text-gray-600">' +
+          escapeHtml(f.type) +
+          "</td></tr>",
+      )
+      .join("");
+    body =
+      (item.sideEffect
+        ? '<p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">Mutates external state when the model invokes this tool.</p>'
+        : "") +
+      section("Description", escapeHtml(item.descriptionFull || item.description || "—")) +
+      section(
+        "Input schema",
+        schemaRows
+          ? '<table class="w-full text-left"><thead><tr><th class="pb-2 text-xs text-gray-500">Field</th><th class="pb-2 text-xs text-gray-500">Type</th></tr></thead><tbody>' +
+            schemaRows +
+            "</tbody></table>"
+          : '<p class="text-gray-500 text-sm">' + escapeHtml(item.schema || "No schema") + "</p>",
+      ) +
+      section("Source context", preBlock(item.snippet));
+  } else if (kind === "chains") {
+    body =
+      section("Model", escapeHtml(item.modelFull || item.model)) +
+      section("Prompts", escapeHtml((item.prompts || []).join("; ") || "—")) +
+      section("Tools", escapeHtml((item.tools || []).join(", ") || "—")) +
+      section("Source context", preBlock(item.snippet));
+  } else if (kind === "routes") {
+    body =
+      section("Methods", escapeHtml((item.methods || []).join(", ") || "unknown")) +
+      section("AI patterns", escapeHtml((item.aiPatterns || []).join(", ") || "none")) +
+      section("Source context", preBlock(item.snippet));
+  } else if (kind === "entrypoints") {
+    body =
+      section("Hook", escapeHtml(item.hook)) +
+      section("API target", escapeHtml(item.api)) +
+      section("Source context", preBlock(item.snippet));
+  }
 
-      .metric span {
-        color: var(--muted);
-        font-size: 12px;
-      }
+  return (
+    '<div class="grid gap-4">' +
+    '<div class="flex flex-wrap items-start gap-2"><h2 class="text-lg font-semibold text-gray-900 flex-1">' +
+    escapeHtml(step ? step.title : item.name || item.hook) +
+    "</h2>" +
+    (badges.length ? '<div class="flex flex-wrap gap-1">' + badges.join("") + "</div>" : "") +
+    "</div>" +
+    (step && step.note ? '<p class="text-sm text-gray-500">' + escapeHtml(step.note) + "</p>" : "") +
+    locBar(item) +
+    body +
+    "</div>"
+  );
+}
 
-      .agents {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: 14px;
-      }
+function renderFlowTimeline(steps) {
+  if (!steps.length) {
+    return '<p class="text-sm text-gray-500">No execution flow for this agent.</p>';
+  }
+  return (
+    '<ol class="flow-track list-none m-0 p-0">' +
+    steps
+      .map(function (step, index) {
+        const meta = PHASE_META[step.phase] || PHASE_META.empty;
+        const active = state.selectedId === step.id;
+        const nested = !!step.nested;
+        const isLast = index === steps.length - 1;
+        const railPad = nested ? "pt-0" : "pt-0";
+        return (
+          '<li class="flow-step grid grid-cols-[2.75rem_minmax(0,1fr)] gap-x-3' +
+          (nested ? " flow-step-nested" : "") +
+          '">' +
+          '<div class="flow-rail flex flex-col items-center ' +
+          railPad +
+          '">' +
+          flowStepMarker(step, active) +
+          (!isLast ? '<div class="flow-rail-line w-px flex-1 min-h-3 bg-gray-200 mt-1"></div>' : "") +
+          "</div>" +
+          '<div class="pb-3 min-w-0">' +
+          '<button type="button" class="' +
+          flowCardClass(active, nested) +
+          '" data-flow-id="' +
+          escapeHtml(step.id) +
+          '" data-flow-kind="' +
+          escapeHtml(step.kind) +
+          '">' +
+          '<div class="flex gap-3 px-3.5 py-3">' +
+          '<div class="w-1 shrink-0 rounded-full ' +
+          phaseAccent(step.phase) +
+          '" aria-hidden="true"></div>' +
+          '<div class="min-w-0 flex-1">' +
+          '<div class="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">' +
+          escapeHtml(meta.label) +
+          "</div>" +
+          '<div class="mt-1 text-[15px] font-medium leading-snug text-gray-900">' +
+          escapeHtml(step.title) +
+          "</div>" +
+          '<div class="mt-1 font-mono text-[12px] leading-relaxed text-gray-500 break-all">' +
+          escapeHtml(step.subtitle) +
+          "</div>" +
+          "</div>" +
+          "</div>" +
+          "</button>" +
+          "</div>" +
+          "</li>"
+        );
+      })
+      .join("") +
+    "</ol>"
+  );
+}
 
-      .agent-button {
-        min-width: 160px;
-        border: 2px solid #1f271d;
-        border-radius: 8px;
-        background: #fff;
-        color: var(--ink);
-        padding: 18px 20px;
-        cursor: pointer;
-        font: inherit;
-        font-weight: 800;
-      }
+async function copyText(value) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+  } catch (e) {}
+  const ta = document.createElement("textarea");
+  ta.value = value;
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  document.body.removeChild(ta);
+}
 
-      .agent-button.active {
-        border-color: var(--blue);
-        color: var(--blue);
-        box-shadow: inset 0 0 0 1px var(--blue);
-      }
+function render() {
+  const agent = currentAgent();
+  const steps = flowStepsForAgent(state.agentId);
 
-      .workspace {
-        display: grid;
-        grid-template-columns: minmax(260px, 0.95fr) minmax(320px, 1.05fr);
-        gap: 28px;
-        align-items: start;
-      }
+  document.querySelector("#agents").innerHTML =
+    (trace.agents || [])
+      .map(function (item) {
+        return (
+          '<button type="button" class="' +
+          agentButtonClass(item.id === state.agentId) +
+          '" data-agent="' +
+          escapeHtml(item.id) +
+          '">' +
+          escapeHtml(item.name) +
+          "</button>"
+        );
+      })
+      .join("") ||
+    '<span class="text-sm text-gray-500">No agents detected</span>';
 
-      .agent-title {
-        margin: 0 0 22px;
-        color: var(--blue);
-        text-align: center;
-        font-size: 32px;
-      }
-
-      .evidence-list {
-        display: grid;
-        gap: 12px;
-      }
-
-      .evidence-button {
-        width: 100%;
-        border: 2px solid #1f271d;
-        border-radius: 7px;
-        background: #fff;
-        color: var(--ink);
-        padding: 18px;
-        text-align: center;
-        cursor: pointer;
-        font: inherit;
-        font-weight: 800;
-      }
-
-      .evidence-button.active {
-        border-color: var(--blue);
-        color: var(--blue);
-      }
-
-      .evidence-button small {
-        display: block;
-        margin-top: 4px;
-        color: var(--muted);
-        font-weight: 500;
-      }
-
-      .detail-title {
-        margin-bottom: 12px;
-        text-align: center;
-        font-weight: 800;
-      }
-
-      .detail-box {
-        min-height: 280px;
-        border: 2px solid var(--blue);
-        border-radius: 7px;
-        background: #fff;
-        padding: 18px;
-        display: grid;
-        gap: 12px;
-        align-content: start;
-      }
-
-      .row {
-        border-top: 1px solid var(--line);
-        padding-top: 10px;
-      }
-
-      .row:first-child {
-        border-top: 0;
-        padding-top: 0;
-      }
-
-      .row span {
-        display: block;
-        color: var(--muted);
-        font-size: 11px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
-      .row strong,
-      .row code {
-        display: block;
-        margin-top: 6px;
-      }
-
-      .row code {
-        color: var(--muted);
-        font-size: 12px;
-        overflow-wrap: anywhere;
-      }
-
-      @media (max-width: 860px) {
-        .hero,
-        .workspace {
-          grid-template-columns: 1fr;
-        }
-
-        .summary {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-      }
-
-      @media (max-width: 560px) {
-        .toolbar {
-          align-items: flex-start;
-          flex-direction: column;
-        }
-
-      }
-    </style>
-  </head>
-  <body>
-    <header class="toolbar">
-      <div class="brand">
-        <strong>Agent Observe Skill</strong>
-        <span>Local scanner for prompts, tools, chains, routes, evals, and risks.</span>
-      </div>
-    </header>
-
-    <main>
-      <div class="hero">
-        <h1>Map every agent prompt, tool, and chain.</h1>
-        <p class="trust">
-          <strong>Your code stays local.</strong> Generates a private observability report in
-          <code>.agent-observe-skill/</code>.
-        </p>
-      </div>
-
-      <section class="install-panel">
-        <h2>Install in Codex</h2>
-        <p>Add the Agent Observe marketplace once, restart Codex, then install Agent Observe Skill from the Plugin Directory.</p>
-        <code class="install-command">codex plugin marketplace add scottschindler/agent-observe-skill --sparse .agents/plugins</code>
-      </section>
-
-      <section>
-        <h2>Overall</h2>
-        <div class="summary" id="summary"></div>
-      </section>
-
-      <section>
-        <h2>Agents</h2>
-        <div class="agents" id="agents"></div>
-      </section>
-
-      <section class="workspace">
-        <div>
-          <h2 class="agent-title" id="agent-title">Checkout assistant</h2>
-          <div class="evidence-list" id="evidence-list"></div>
-        </div>
-        <div>
-          <div class="detail-title" id="detail-title">Entry points info</div>
-          <div class="detail-box" id="detail-box"></div>
-        </div>
-      </section>
-    </main>
-
-    <script>
-      const data = {
-        summary: {
-          agents: 2,
-          entrypoints: 2,
-          prompts: 6,
-          tools: 4,
-          chains: 3,
-          routes: 3,
-          risks: 5,
-        },
-        agents: {
-          checkout: {
-            name: "Checkout assistant",
-            entrypoints: [["UI entry", "Checkout chat panel", "components/chat-panel.tsx uses useChat({ api: '/api/chat' })"]],
-            tools: [
-              ["Read tool", "searchOrders", "inputSchema: orderId, email"],
-              ["Side-effect tool", "refundUser", "execute: stripe.refunds.create(...)"],
-            ],
-            prompts: [["System prompt", "Support agent policy", "app/api/chat/route.ts:18"]],
-            chains: [["streamText", "gpt-4.1-mini response chain", "tools: searchOrders, refundUser"]],
-            routes: [["Route", "app/api/chat/route.ts", "POST, streamText, messages"]],
-            risks: [
-              ["High risk", "refundUser mutates payment state", "Needs trace ID and audit logging."],
-              ["Medium risk", "Inline prompt", "Hard to diff, reuse, or evaluate."],
-            ],
-          },
-          billing: {
-            name: "Billing workflow",
-            entrypoints: [["API entry", "Billing route", "app/api/billing/route.ts accepts POST requests"]],
-            tools: [
-              ["Read tool", "getInvoice", "inputSchema: invoiceId"],
-              ["Side-effect tool", "sendBillingEmail", "execute: email.send(...)"],
-            ],
-            prompts: [["Prompt template", "Billing workflow prompt", "lib/agents/billing.ts:42"]],
-            chains: [["generateText", "Billing summary chain", "No trace ID evidence"]],
-            routes: [["Route", "app/api/billing/route.ts", "POST, generateText"]],
-            risks: [
-              ["Medium risk", "Missing eval", "No promptfoo or runtime eval evidence near chain."],
-              ["High risk", "No trace metadata", "No traceId, structured logger, or telemetry evidence."],
-            ],
-          },
-        },
-      };
-
-      const labels = [
-        ["entrypoints", "Entry points"],
-        ["tools", "Tool calls"],
-        ["prompts", "Prompts"],
-        ["chains", "Model calls"],
-        ["routes", "Routes"],
-        ["risks", "Risks"],
-      ];
-      const state = { agent: "checkout", kind: "entrypoints" };
-
-      function render() {
-        document.querySelector("#summary").innerHTML = [
-          ["Agents", data.summary.agents],
-          ["Entry points", data.summary.entrypoints],
-          ["Prompts", data.summary.prompts],
-          ["Tool calls", data.summary.tools],
-          ["Model calls", data.summary.chains],
-          ["Routes", data.summary.routes],
-          ["Risks", data.summary.risks],
-        ]
-          .map(([label, value]) => `<div class="metric"><strong>${value}</strong><span>${label}</span></div>`)
-          .join("");
-
-        document.querySelector("#agents").innerHTML = Object.entries(data.agents)
-          .map(
-            ([id, agent]) =>
-              `<button type="button" class="agent-button ${id === state.agent ? "active" : ""}" data-agent="${id}">${agent.name}</button>`,
-          )
-          .join("");
-
-        document.querySelectorAll("[data-agent]").forEach((button) => {
-          button.addEventListener("click", () => {
-            state.agent = button.dataset.agent;
-            render();
-          });
-        });
-
-        const agent = data.agents[state.agent];
-        document.querySelector("#agent-title").textContent = agent.name;
-        document.querySelector("#evidence-list").innerHTML = labels
-          .map(
-            ([kind, label]) =>
-              `<button type="button" class="evidence-button ${kind === state.kind ? "active" : ""}" data-kind="${kind}">${label}<small>${agent[kind].length} detected</small></button>`,
-          )
-          .join("");
-
-        document.querySelectorAll("[data-kind]").forEach((button) => {
-          button.addEventListener("click", () => {
-            state.kind = button.dataset.kind;
-            render();
-          });
-        });
-
-        const activeLabel = labels.find(([kind]) => kind === state.kind)[1];
-        document.querySelector("#detail-title").textContent = `${activeLabel} info`;
-        document.querySelector("#detail-box").innerHTML = agent[state.kind]
-          .map(
-            ([meta, title, detail]) =>
-              `<div class="row"><span>${meta}</span><strong>${title}</strong><code>${detail}</code></div>`,
-          )
-          .join("");
-      }
-
+  document.querySelectorAll("[data-agent]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      state.agentId = button.dataset.agent;
+      state.selectedId = "";
+      state.kind = "";
       render();
+    });
+  });
 
-    </script>
-  </body>
-</html>
+  const noteEl = document.querySelector("#flow-note");
+  if (noteEl) noteEl.textContent = trace.flowNote || "";
+
+  if (!state.selectedId && steps[0]) {
+    state.selectedId = steps[0].id;
+    state.kind = steps[0].kind;
+  }
+  const currentStep = steps.find(function (s) {
+    return s.id === state.selectedId;
+  });
+  if (state.selectedId && !currentStep && steps[0]) {
+    state.selectedId = steps[0].id;
+    state.kind = steps[0].kind;
+  }
+
+  document.querySelector("#flow-timeline").innerHTML = renderFlowTimeline(steps);
+  document.querySelectorAll("[data-flow-id]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      state.selectedId = button.dataset.flowId;
+      state.kind = button.dataset.flowKind;
+      render();
+    });
+  });
+
+  const step = steps.find(function (s) {
+    return s.id === state.selectedId;
+  });
+  const item = findItem(state.kind, state.selectedId);
+  document.querySelector("#detail-title").textContent = step ? "Step " + step.order + " · " + (PHASE_META[step.phase]?.label || "Details") : "Step details";
+  const detailBox = document.querySelector("#detail-box");
+  detailBox.className =
+    "min-h-[280px] rounded-xl bg-white p-5 shadow-sm " +
+    (step ? "border-2 border-blue-500 ring-2 ring-blue-50" : "border border-gray-200");
+  detailBox.innerHTML = renderDetail(item, state.kind, step);
+
+  document.querySelectorAll(".copy-path").forEach(function (button) {
+    button.addEventListener("click", function () {
+      copyText(button.dataset.copy);
+    });
+  });
+}
+
+render();
+</script>
+</body></html>

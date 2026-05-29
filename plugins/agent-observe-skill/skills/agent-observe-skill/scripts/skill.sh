@@ -106,6 +106,7 @@ const ignoreDirs = new Set([
   ".turbo",
   ".vercel",
   ".agent-observe-skill",
+  "app/agent-observe-skill",
 ]);
 const scanExts = new Set([
   ".js",
@@ -163,6 +164,57 @@ function clean(value) {
 function preview(value, max = 140) {
   const text = clean(value);
   return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+}
+
+function capText(value, max = 8000) {
+  const text = String(value ?? "");
+  return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+}
+
+function snippetOf(text, line, ctx = 5) {
+  const lines = text.split(/\r?\n/);
+  const idx = Math.max(0, Math.min(lines.length - 1, line - 1));
+  const start = Math.max(0, idx - ctx);
+  const end = Math.min(lines.length, idx + ctx + 1);
+  return lines
+    .slice(start, end)
+    .map((content, i) => {
+      const n = start + i + 1;
+      const marker = n === line ? ">" : " ";
+      return `${marker} ${String(n).padStart(4, " ")} | ${content}`;
+    })
+    .join("\n");
+}
+
+function schemaFields(snippet) {
+  const schema = extractProperty(snippet, "inputSchema") || extractProperty(snippet, "schema") || "";
+  if (!schema) return [];
+  const fields = [];
+  const seen = new Set();
+  eachMatch(schema, /\b([A-Za-z_$][\w$]*)\s*:\s*((?:z\.|Schema\.|Type\.|yup\.|v\.)[A-Za-z0-9_.]+(?:\([^)]*\))?)/g, (m) => {
+    if (seen.has(m[1])) return;
+    seen.add(m[1]);
+    fields.push({ name: m[1], type: m[2] });
+  });
+  if (!fields.length) {
+    eachMatch(schema, /\b([A-Za-z_$][\w$]*)\s*:/g, (m) => {
+      if (seen.has(m[1]) || ["optional", "describe", "default", "strict", "refine"].includes(m[1])) return;
+      seen.add(m[1]);
+      fields.push({ name: m[1], type: "unknown" });
+    });
+  }
+  return fields.slice(0, 24);
+}
+
+function riskFixHint(kind) {
+  const hints = {
+    "inline-prompt": "Extract the prompt to a named constant or dedicated file, then add eval coverage.",
+    "side-effect-tool": "Add trace IDs, authorization checks, and integration tests for this tool's execute handler.",
+    "missing-eval": "Add promptfoo, vitest, or runtime evals near this chain.",
+    "missing-trace": "Add traceId, structured logging, or AI SDK experimental_telemetry.",
+    "route-without-trace": "Instrument this API route with trace metadata before model calls return.",
+  };
+  return hints[kind] || "Review this finding and add observability or tests.";
 }
 
 function id(prefix, file, line, extra = "") {
@@ -359,6 +411,8 @@ function pushRisk(kind, severity, file, line, message, evidence, targetId = "", 
     line,
     message,
     evidence: preview(evidence, 220),
+    evidenceFull: capText(evidence, 1200),
+    fix: riskFixHint(kind),
     targetId,
     agentId,
   };
@@ -394,6 +448,7 @@ for (const file of files) {
       methods: [...methods],
       aiPatterns,
       hasTrace: hasTraceEvidence(text),
+      snippet: snippetOf(text, 1),
       agentId,
     });
   }
@@ -406,13 +461,15 @@ for (const file of files) {
       ? { id: `route:${slug(apiMatch[1])}`, name: titleCaseSlug(apiMatch[1]), source: "client-api" }
       : inferAgent(file, text, m.index, m[1]);
     const agentId = registerAgent(uiAgent, file, lineOf(text, m.index), "ui");
+    const uiLine = lineOf(text, m.index);
     records.uiEntrypoints.push({
-      id: id("ui", file, lineOf(text, m.index), m[1]),
+      id: id("ui", file, uiLine, m[1]),
       file: relative,
-      line: lineOf(text, m.index),
+      line: uiLine,
       hook: m[1],
       api: apiValue,
       evidence: preview(snippet, 220),
+      snippet: snippetOf(text, uiLine),
       agentId,
     });
   });
@@ -420,15 +477,18 @@ for (const file of files) {
   eachMatch(text, /\b(system|prompt|messages)\s*:\s*(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\[[\s\S]{0,700}?\]|[A-Za-z_$][\w$.[\]]*)/g, (m) => {
     const value = m[2] || "";
     const inline = /^[`"']/.test(value) || (m[1] === "messages" && value.trim().startsWith("["));
+    const promptLine = lineOf(text, m.index);
     const prompt = {
-      id: id("prompt", file, lineOf(text, m.index), `${m[1]}:${records.prompts.length + 1}`),
+      id: id("prompt", file, promptLine, `${m[1]}:${records.prompts.length + 1}`),
       file: relative,
-      line: lineOf(text, m.index),
-      agentId: registerAgent(fileAgent, file, lineOf(text, m.index), "prompt"),
+      line: promptLine,
+      agentId: registerAgent(fileAgent, file, promptLine, "prompt"),
       kind: m[1],
       inline,
       valueType: inline ? "inline literal" : "reference",
       preview: preview(value, 180),
+      text: capText(value, 8000),
+      snippet: snippetOf(text, promptLine),
     };
     records.prompts.push(prompt);
     if (inline) {
@@ -446,16 +506,19 @@ for (const file of files) {
   });
 
   eachMatch(text, /(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*(?:Prompt|System|Messages|Instruction|Instructions)[A-Za-z_$\w]*)\s*=\s*(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')/gi, (m) => {
+    const constLine = lineOf(text, m.index);
     records.prompts.push({
-      id: id("prompt", file, lineOf(text, m.index), m[1]),
+      id: id("prompt", file, constLine, m[1]),
       file: relative,
-      line: lineOf(text, m.index),
-      agentId: registerAgent(fileAgent, file, lineOf(text, m.index), "prompt"),
+      line: constLine,
+      agentId: registerAgent(fileAgent, file, constLine, "prompt"),
       kind: "constant",
       name: m[1],
       inline: false,
       valueType: "named constant",
       preview: preview(m[2], 180),
+      text: capText(m[2], 8000),
+      snippet: snippetOf(text, constLine),
     });
   });
 
@@ -463,7 +526,8 @@ for (const file of files) {
     const snippet = extractBalancedCall(text, m.index);
     const line = lineOf(text, m.index);
     const name = inferAssignedName(text, m.index, `tool_${records.tools.length + 1}`);
-    const sideEffect = hasSideEffect(extractProperty(snippet, "execute") || snippet);
+    const sideEffect = hasSideEffect(snippet) || hasSideEffect(extractProperty(snippet, "execute"));
+    const fields = schemaFields(snippet);
     const tool = {
       id: id("tool", file, line, name),
       file: relative,
@@ -471,11 +535,14 @@ for (const file of files) {
       agentId: registerAgent(fileAgent, file, line, "tool"),
       name,
       description: preview(extractProperty(snippet, "description") || "No description detected", 160),
+      descriptionFull: capText(extractProperty(snippet, "description") || "", 2000),
       schema: schemaSummary(snippet),
+      schemaFields: fields,
       hasInputSchema: /\binputSchema\s*:/.test(snippet),
       hasExecute: /\bexecute\s*:/.test(snippet),
       sideEffect,
       evidence: preview(snippet, 240),
+      snippet: snippetOf(text, line),
     };
     records.tools.push(tool);
     if (sideEffect) {
@@ -497,14 +564,21 @@ for (const file of files) {
     const line = lineOf(text, m.index);
     const model = extractProperty(snippet, "model") || "No model property detected";
     const promptRefs = [];
+    const promptRefIds = [];
     for (const key of ["system", "prompt", "messages"]) {
       const value = extractProperty(snippet, key);
-      if (value) promptRefs.push(`${key}: ${preview(value, 90)}`);
+      if (value) {
+        promptRefs.push(`${key}: ${preview(value, 90)}`);
+        const match = records.prompts.find(
+          (p) => p.file === relative && p.kind === key && (p.text === capText(value, 8000) || p.preview === preview(value, 180)),
+        );
+        if (match) promptRefIds.push(match.id);
+      }
     }
     const toolBlock = extractProperty(snippet, "tools");
     const tools = [];
     if (toolBlock) {
-      eachMatch(toolBlock, /\b([A-Za-z_$][\w$]*)\s*[:,]/g, (tm) => {
+      eachMatch(toolBlock, /\b([A-Za-z_$][\w$]*)\s*(?=[,:}])/g, (tm) => {
         if (!["description", "parameters", "inputSchema", "execute"].includes(tm[1])) tools.push(tm[1]);
       });
     }
@@ -515,11 +589,15 @@ for (const file of files) {
       agentId: registerAgent(inferAgent(file, text, m.index, m[1]), file, line, "chain"),
       type: m[1],
       model: preview(model, 120),
+      modelFull: capText(model, 500),
       prompts: promptRefs,
+      promptIds: promptRefIds,
       tools: [...new Set(tools)],
+      toolIds: [],
       hasEval: hasEvalEvidence(text, file),
       hasTrace: hasTraceEvidence(snippet) || hasTraceEvidence(text),
       evidence: preview(snippet, 260),
+      snippet: snippetOf(text, line),
     };
     records.modelCalls.push(chain);
     records.chains.push(chain);
@@ -534,6 +612,7 @@ for (const file of files) {
   eachMatch(text, /\bToolLoopAgent\b/g, (m) => {
     const line = lineOf(text, m.index);
     const snippet = text.slice(Math.max(0, m.index - 220), Math.min(text.length, m.index + 700));
+    const loopTools = records.tools.filter((tool) => tool.file === relative);
     const chain = {
       id: id("chain", file, line, "ToolLoopAgent"),
       file: relative,
@@ -541,11 +620,15 @@ for (const file of files) {
       agentId: registerAgent(inferAgent(file, text, m.index, "ToolLoopAgent"), file, line, "chain"),
       type: "ToolLoopAgent",
       model: "Agent loop",
+      modelFull: "Agent loop",
       prompts: [],
-      tools: records.tools.filter((tool) => tool.file === relative).map((tool) => tool.name),
+      promptIds: [],
+      tools: loopTools.map((tool) => tool.name),
+      toolIds: loopTools.map((tool) => tool.id),
       hasEval: hasEvalEvidence(text, file),
       hasTrace: hasTraceEvidence(text),
       evidence: preview(snippet, 260),
+      snippet: snippetOf(text, line),
     };
     records.chains.push(chain);
     if (!chain.hasEval) pushRisk("missing-eval", "medium", file, line, "ToolLoopAgent chain lacks nearby eval or test evidence.", snippet, chain.id, chain.agentId);
@@ -566,6 +649,219 @@ for (const route of records.routes) {
       route.agentId,
     );
   }
+}
+
+function postProcessCrossLinks() {
+  const toolIndex = new Map();
+  for (const tool of records.tools) {
+    toolIndex.set(`${tool.file}::${tool.name}`, tool.id);
+    toolIndex.set(`${tool.agentId}::${tool.name}`, tool.id);
+  }
+  for (const chain of records.chains) {
+    if (!chain.toolIds || !chain.toolIds.filter(Boolean).length) {
+      chain.toolIds = (chain.tools || []).map(
+        (name) => toolIndex.get(`${chain.file}::${name}`) || toolIndex.get(`${chain.agentId}::${name}`) || "",
+      );
+    }
+    if (!chain.promptIds) chain.promptIds = [];
+  }
+}
+
+postProcessCrossLinks();
+
+function inferChainOutput(chain) {
+  const snippet = `${chain.snippet || ""} ${chain.evidence || ""}`;
+  if (/toDataStreamResponse|toTextStreamResponse|toUIMessageStreamResponse/.test(snippet)) {
+    return "Streamed tokens to the client (data stream)";
+  }
+  if (/toAIStreamResponse/.test(snippet)) {
+    return "Streamed AI response to the client";
+  }
+  if (/NextResponse\.json|Response\.json|return\s+result\b/.test(snippet)) {
+    return "JSON or structured HTTP response";
+  }
+  if (chain.type === "streamText" || chain.type === "streamObject") {
+    return `Streamed model output (${chain.type})`;
+  }
+  if (chain.type === "generateText" || chain.type === "generateObject") {
+    return `Generated ${chain.type === "generateObject" ? "object" : "text"} returned to caller`;
+  }
+  return "Response returned to caller";
+}
+
+function matchRouteForEntry(entry, routes) {
+  const api = clean((entry.api || "").replace(/['"]/g, ""));
+  if (!api) return routes[0] || null;
+  return (
+    routes.find((route) => {
+      const routePath = route.file
+        .replace(/^app\/api\//, "/api/")
+        .replace(/\/route\.[cm]?[jt]sx?$/, "");
+      return api.includes(routePath) || route.file.includes(api.replace(/^\//, ""));
+    }) || routes[0] || null
+  );
+}
+
+function buildAgentFlow(agentId) {
+  const steps = [];
+  const push = (step) => {
+    steps.push({ ...step, order: steps.length + 1 });
+  };
+
+  const entries = records.uiEntrypoints
+    .filter((item) => item.agentId === agentId)
+    .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+  const routes = records.routes.filter((item) => item.agentId === agentId);
+  const prompts = records.prompts
+    .filter((item) => item.agentId === agentId)
+    .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+  const chains = records.chains
+    .filter((item) => item.agentId === agentId)
+    .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+  const tools = records.tools
+    .filter((item) => item.agentId === agentId)
+    .sort((a, b) => a.line - b.line);
+
+  if (entries.length) {
+    for (const entry of entries) {
+      push({
+        phase: "entry",
+        kind: "entrypoints",
+        id: entry.id,
+        title: `User entry · ${entry.hook}`,
+        subtitle: `${entry.file}:${entry.line} → ${entry.api}`,
+        note: "The user sends a message from the UI.",
+      });
+    }
+  }
+
+  const primaryEntry = entries[0];
+  const matchedRoute = primaryEntry ? matchRouteForEntry(primaryEntry, routes) : routes[0];
+  if (matchedRoute) {
+    push({
+      phase: "route",
+      kind: "routes",
+      id: matchedRoute.id,
+      title: `API route · ${(matchedRoute.methods || []).join("/") || "handler"}`,
+      subtitle: matchedRoute.file,
+      note: "The HTTP request reaches your server route.",
+    });
+  } else if (routes.length && !entries.length) {
+    for (const route of routes) {
+      push({
+        phase: "route",
+        kind: "routes",
+        id: route.id,
+        title: `API entry · ${route.file}`,
+        subtitle: `AI: ${(route.aiPatterns || []).join(", ") || "none"}`,
+        note: "No client hook detected; request starts at the API route.",
+      });
+    }
+  }
+
+  const pushedPromptIds = new Set();
+
+  for (const chain of chains) {
+    const chainPrompts = (chain.promptIds || [])
+      .map((promptId) => prompts.find((item) => item.id === promptId))
+      .filter(Boolean)
+      .sort((a, b) => a.line - b.line);
+    for (const prompt of chainPrompts) {
+      if (pushedPromptIds.has(prompt.id)) continue;
+      pushedPromptIds.add(prompt.id);
+      const label = prompt.kind === "system" ? "System prompt" : `${prompt.kind} prompt`;
+      push({
+        phase: "prompt",
+        kind: "prompts",
+        id: prompt.id,
+        title: prompt.name ? `${label} · ${prompt.name}` : label,
+        subtitle: preview(prompt.text || prompt.preview, 100),
+        note: "Instructions are attached before the model runs.",
+      });
+    }
+    for (const prompt of prompts.filter(
+      (item) => item.file === chain.file && item.line <= chain.line + 12 && !pushedPromptIds.has(item.id),
+    )) {
+      pushedPromptIds.add(prompt.id);
+      const label = prompt.kind === "system" ? "System prompt" : `${prompt.kind} prompt`;
+      push({
+        phase: "prompt",
+        kind: "prompts",
+        id: prompt.id,
+        title: prompt.name ? `${label} · ${prompt.name}` : label,
+        subtitle: preview(prompt.text || prompt.preview, 100),
+        note: "Instructions are attached before the model runs.",
+      });
+    }
+
+    push({
+      phase: "model",
+      kind: "chains",
+      id: chain.id,
+      title: `Model call · ${chain.type}`,
+      subtitle: `${chain.model} · ${chain.file}:${chain.line}`,
+      note: "The LLM runs and may invoke tools in a loop (order varies at runtime).",
+    });
+
+    const chainTools = (chain.toolIds || [])
+      .map((toolId) => tools.find((tool) => tool.id === toolId))
+      .filter(Boolean);
+    const readTools = chainTools.filter((tool) => !tool.sideEffect);
+    const effectTools = chainTools.filter((tool) => tool.sideEffect);
+
+    for (const tool of readTools) {
+      push({
+        phase: "tool",
+        kind: "tools",
+        id: tool.id,
+        title: `Tool · ${tool.name}`,
+        subtitle: tool.schema || "read / lookup",
+        note: "Model may call this to fetch data (no side effects detected).",
+        nested: true,
+      });
+    }
+    for (const tool of effectTools) {
+      push({
+        phase: "side-effect",
+        kind: "tools",
+        id: tool.id,
+        title: `External action · ${tool.name}`,
+        subtitle: `${tool.file}:${tool.line}`,
+        note: "Database, payment, email, or other mutation when the model invokes this tool.",
+        nested: true,
+      });
+    }
+
+    push({
+      phase: "output",
+      kind: "chains",
+      id: `${chain.id}:output`,
+      title: "Response to client",
+      subtitle: inferChainOutput(chain),
+      note: "Final output leaves the server and returns to the entry point.",
+    });
+  }
+
+  if (!steps.length) {
+    push({
+      phase: "empty",
+      kind: "",
+      id: "",
+      title: "No flow detected",
+      subtitle: "Run the scanner on a repo with AI SDK routes or client hooks.",
+      note: "",
+    });
+  }
+
+  return steps;
+}
+
+function buildAllFlows() {
+  const flows = {};
+  for (const agent of records.agents) {
+    flows[agent.id] = buildAgentFlow(agent.id);
+  }
+  return flows;
 }
 
 function computeAgents() {
@@ -777,134 +1073,91 @@ function tracePayload(generatedAt) {
       uiEntrypoints: records.uiEntrypoints.length,
       risks: records.risks.length,
     },
+    flows: buildAllFlows(),
+    flowNote:
+      "Execution order is inferred from static code structure. Tool call order during a model loop may differ at runtime.",
     ...records,
   };
 }
 
 function renderSimpleHtmlReport(trace, report) {
   const json = JSON.stringify({ ...trace, markdownReport: report }).replace(/</g, "\\u003c");
+  const selectionLabel = escapeHtml(trace.selection.label || "All detected agents");
+  const generatedAt = escapeHtml(trace.generatedAt);
+  const scriptPath = path.join(path.dirname(selfPath), "_report-ui-script.js");
+  let clientScript = "";
+  try {
+    clientScript = fs.readFileSync(scriptPath, "utf8");
+  } catch {
+    clientScript = "document.body.innerHTML = '<p>Report UI script missing. Re-run the scanner.</p>';";
+  }
   return `<!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Observe Report</title>
+    <meta name="description" content="Local Agent Observe scan results for prompts, tools, model calls, routes, and risks." />
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ["Inter", "sans-serif"],
+              mono: ["JetBrains Mono", "monospace"],
+            },
+            colors: {
+              gray: {
+                50: "#fafafa",
+                100: "#f5f5f5",
+                200: "#e5e5e5",
+                300: "#d4d4d4",
+                400: "#a3a3a3",
+                500: "#737373",
+                600: "#525252",
+                700: "#404040",
+                800: "#262626",
+                900: "#171717",
+              },
+            },
+          },
+        },
+      };
+    </script>
     <style>
-      :root { color-scheme: light; --bg: #f7f8f5; --panel: #fff; --ink: #171a16; --muted: #637063; --line: #d7ddd2; --blue: #2f80ed; --red: #b4372f; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      * { box-sizing: border-box; }
-      body { margin: 0; background: var(--bg); color: var(--ink); }
-      main { width: min(1040px, calc(100vw - 32px)); margin: 0 auto; padding: 28px 0 40px; display: grid; gap: 22px; }
-      header { display: flex; justify-content: space-between; gap: 18px; align-items: end; border-bottom: 1px solid var(--line); padding-bottom: 18px; }
-      h1 { margin: 0; font-size: clamp(34px, 6vw, 64px); line-height: .96; letter-spacing: 0; }
-      h2 { margin: 0 0 12px; font-size: 18px; letter-spacing: 0; }
-      p { margin: 0; color: var(--muted); line-height: 1.45; }
-      code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-      section, .panel { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 18px; box-shadow: 0 14px 40px rgba(35, 44, 30, .07); }
-      .trust { max-width: 330px; border-left: 3px solid #1b7c55; padding-left: 12px; }
-      .summary { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 10px; }
-      .metric { border: 1px solid var(--line); border-radius: 7px; padding: 14px; background: #fbfcf9; text-align: center; }
-      .metric strong { display: block; font-size: 28px; }
-      .metric span { color: var(--muted); font-size: 12px; }
-      .agents { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
-      .agent-button { min-width: 150px; border: 2px solid #1f271d; border-radius: 8px; background: #fff; color: var(--ink); padding: 16px 18px; cursor: pointer; font: inherit; font-weight: 760; }
-      .agent-button.active { border-color: var(--blue); color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); }
-      .workspace { display: grid; grid-template-columns: minmax(260px, .95fr) minmax(300px, 1.05fr); gap: 28px; align-items: start; }
-      .agent-title { color: var(--blue); text-align: center; font-size: 30px; margin: 0 0 22px; }
-      .evidence-list { display: grid; gap: 12px; }
-      .evidence-button { width: 100%; border: 2px solid #1f271d; border-radius: 7px; background: #fff; color: var(--ink); padding: 18px; text-align: center; cursor: pointer; font: inherit; font-weight: 760; }
-      .evidence-button.active { border-color: var(--blue); color: var(--blue); }
-      .evidence-button small { display: block; margin-top: 4px; color: var(--muted); font-weight: 500; }
-      .detail-title { text-align: center; margin-bottom: 12px; font-weight: 760; }
-      .detail-box { min-height: 260px; border: 2px solid var(--blue); border-radius: 7px; background: #fff; padding: 18px; display: grid; gap: 12px; align-content: start; }
-      .row { border-top: 1px solid var(--line); padding-top: 10px; }
-      .row:first-child { border-top: 0; padding-top: 0; }
-      .row span { display: block; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
-      .row strong { display: block; margin-top: 5px; }
-      .row code { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-      .empty { color: var(--muted); background: #f1f4ef; border-radius: 7px; padding: 12px; }
-      @media (max-width: 860px) { header, .workspace { grid-template-columns: 1fr; display: grid; } .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .trust { max-width: none; } }
+      body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+      .flow-step-nested .flow-rail { padding-left: 0.35rem; }
+      .flow-step-nested .flow-card { margin-left: 0.25rem; }
+      #flow-timeline { padding-left: 0.15rem; }
     </style>
   </head>
-  <body>
-    <main>
-      <header>
-        <div>
-          <h1>Agent Observe Report</h1>
-          <p>Initial scan scope: <strong>${escapeHtml(trace.selection.label || "All detected agents")}</strong></p>
-        </div>
-        <p class="trust">Your code stayed local. Generated from static analysis at <code>${escapeHtml(trace.generatedAt)}</code>.</p>
-      </header>
-
-      <section>
-        <h2>Overall</h2>
-        <div class="summary" id="summary"></div>
-      </section>
-
-      <section>
-        <h2>Agents</h2>
-        <div class="agents" id="agents"></div>
-      </section>
-
-      <section class="workspace">
-        <div>
-          <h2 class="agent-title" id="agent-title">Agent</h2>
-          <div class="evidence-list" id="evidence-list"></div>
-        </div>
-        <div>
-          <div class="detail-title" id="detail-title">Details</div>
-          <div class="detail-box" id="detail-box"></div>
+  <body class="bg-white text-gray-900 selection:bg-gray-900 selection:text-white min-h-screen flex flex-col relative overflow-x-hidden">
+    <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[400px] opacity-[0.15] pointer-events-none" style="background: radial-gradient(ellipse at top, #000000 0%, transparent 70%)"></div>
+    <main class="flex-grow w-full max-w-6xl mx-auto px-6 pt-10 pb-16 relative z-10 space-y-4">
+      <div>
+        <div class="flex flex-wrap gap-2 mb-3" id="agents" aria-label="Select agent"></div>
+        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900">Results</h1>
+        <p class="mt-1 text-[13px] text-gray-500">Scope: <span class="font-medium text-gray-900">${selectionLabel}</span> · ${generatedAt}</p>
+      </div>
+      <section class="p-4 sm:p-5 rounded-2xl border border-gray-200 bg-white shadow-sm" aria-label="Agent execution flow">
+        <p class="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Execution flow</p>
+        <p class="text-[12px] text-gray-500 mb-4 leading-relaxed" id="flow-note"></p>
+        <div class="grid lg:grid-cols-[minmax(300px,1fr)_minmax(300px,1fr)] gap-8 lg:gap-10 items-start">
+          <div class="max-h-[min(72vh,720px)] overflow-y-auto pr-2 -mr-2" id="flow-timeline"></div>
+          <div class="lg:sticky lg:top-6">
+            <div class="text-[13px] font-semibold uppercase tracking-wide text-gray-500 mb-3" id="detail-title">Step details</div>
+            <div class="min-h-[280px] rounded-xl border border-gray-200 bg-white p-5 shadow-sm" id="detail-box"></div>
+          </div>
         </div>
       </section>
     </main>
     <script>
       const trace = ${json};
-      const state = { agentId: (trace.agents || [])[0]?.id || "", kind: "entrypoints" };
-      const kinds = [
-        ["entrypoints", "Entry points"],
-        ["tools", "Tool calls"],
-        ["prompts", "Prompts"],
-        ["chains", "Model calls"],
-        ["routes", "Routes"],
-        ["risks", "Risks"],
-      ];
-      const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
-      const byAgent = (items) => (items || []).filter((item) => item.agentId === state.agentId);
-      const currentAgent = () => (trace.agents || []).find((agent) => agent.id === state.agentId) || null;
-      function rows(kind) {
-        if (kind === "entrypoints") return byAgent(trace.uiEntrypoints).map((entry) => ({ meta: "UI entry", title: entry.hook, code: entry.file + ":" + entry.line + " · API: " + entry.api }));
-        if (kind === "tools") return byAgent(trace.tools).map((tool) => ({ meta: tool.sideEffect ? "side-effect tool" : "tool", title: tool.name, code: tool.schema + " · " + tool.file + ":" + tool.line }));
-        if (kind === "prompts") return byAgent(trace.prompts).map((prompt) => ({ meta: prompt.kind, title: prompt.preview, code: prompt.file + ":" + prompt.line }));
-        if (kind === "chains") return byAgent(trace.chains).map((chain) => ({ meta: chain.type, title: chain.model, code: chain.file + ":" + chain.line + " · tools: " + ((chain.tools || []).join(", ") || "none") }));
-        if (kind === "routes") return byAgent(trace.routes).map((route) => ({ meta: route.kind, title: route.file, code: "methods: " + ((route.methods || []).join(", ") || "unknown") + " · AI: " + ((route.aiPatterns || []).join(", ") || "none") }));
-        return byAgent(trace.risks).map((risk) => ({ meta: risk.severity + " / " + risk.kind, title: risk.message, code: risk.file + ":" + risk.line }));
-      }
-      function count(kind) {
-        if (kind === "entrypoints") return byAgent(trace.uiEntrypoints).length;
-        return rows(kind).length;
-      }
-      function render() {
-        const agent = currentAgent();
-        const summary = [
-          ["Agents", trace.summary?.agents || 0],
-          ["Entry points", trace.summary?.uiEntrypoints || 0],
-          ["Prompts", trace.summary?.prompts || 0],
-          ["Tool calls", trace.summary?.tools || 0],
-          ["Model calls", trace.summary?.chains || 0],
-          ["Routes", trace.summary?.routes || 0],
-          ["Risks", trace.summary?.risks || 0],
-        ];
-        document.querySelector("#summary").innerHTML = summary.map(([label, value]) => '<div class="metric"><strong>' + escapeHtml(value) + '</strong><span>' + escapeHtml(label) + '</span></div>').join("");
-        document.querySelector("#agents").innerHTML = (trace.agents || []).map((item) => '<button type="button" class="agent-button ' + (item.id === state.agentId ? "active" : "") + '" data-agent="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + '</button>').join("") || '<p class="empty">No agent candidates detected.</p>';
-        document.querySelectorAll("[data-agent]").forEach((button) => button.addEventListener("click", () => { state.agentId = button.dataset.agent; render(); }));
-        document.querySelector("#agent-title").textContent = agent ? agent.name : "No agent selected";
-        document.querySelector("#evidence-list").innerHTML = kinds.map(([kind, label]) => '<button type="button" class="evidence-button ' + (kind === state.kind ? "active" : "") + '" data-kind="' + kind + '">' + label + '<small>' + count(kind) + ' detected</small></button>').join("");
-        document.querySelectorAll("[data-kind]").forEach((button) => button.addEventListener("click", () => { state.kind = button.dataset.kind; render(); }));
-        const label = kinds.find(([kind]) => kind === state.kind)?.[1] || "Details";
-        document.querySelector("#detail-title").textContent = label + " info";
-        const detailRows = rows(state.kind);
-        document.querySelector("#detail-box").innerHTML = detailRows.map((row) => '<div class="row"><span>' + escapeHtml(row.meta) + '</span><strong>' + escapeHtml(row.title) + '</strong><code>' + escapeHtml(row.code) + '</code></div>').join("") || '<p class="empty">No ' + escapeHtml(label.toLowerCase()) + ' detected for this agent.</p>';
-      }
-      render();
+      ${clientScript}
     </script>
   </body>
 </html>
@@ -934,10 +1187,6 @@ const data = ${JSON.stringify(data, null, 2)} as any;
 const colors = { bg: "#f7f8f5", panel: "#fff", ink: "#171a16", muted: "#637063", line: "#d7ddd2", blue: "#2f80ed" };
 const kinds = [["entrypoints", "Entry points"], ["tools", "Tool calls"], ["prompts", "Prompts"], ["chains", "Model calls"], ["routes", "Routes"], ["risks", "Risks"]] as const;
 
-function Metric({ label, value }: { label: string; value: number }) {
-  return <div style={{ border: "1px solid " + colors.line, borderRadius: 7, padding: 14, background: "#fbfcf9", textAlign: "center" }}><strong style={{ display: "block", fontSize: 28 }}>{value}</strong><span style={{ color: colors.muted, fontSize: 12 }}>{label}</span></div>;
-}
-
 export default function AgentObserveSkillPage() {
   const [agentId, setAgentId] = useState<string>(data.agents[0]?.id || "");
   const [kind, setKind] = useState<string>("entrypoints");
@@ -953,20 +1202,12 @@ export default function AgentObserveSkillPage() {
   }, [agentId, kind]);
   const count = (item: string) => item === "entrypoints" ? byAgent(data.uiEntrypoints).length : (item === "routes" ? byAgent(data.routes).length : item === "tools" ? byAgent(data.tools).length : item === "prompts" ? byAgent(data.prompts).length : item === "chains" ? byAgent(data.chains).length : byAgent(data.risks).length);
   const activeLabel = kinds.find(([item]) => item === kind)?.[1] || "Details";
-  const summary = [["Agents", data.summary.agents], ["Entry points", data.summary.uiEntrypoints], ["Prompts", data.summary.prompts], ["Tool calls", data.summary.tools], ["Model calls", data.summary.chains], ["Routes", data.summary.routes], ["Risks", data.summary.risks]] as const;
   return (
-    <main style={{ minHeight: "100vh", background: colors.bg, color: colors.ink, padding: 28 }}>
-      <div style={{ maxWidth: 1040, margin: "0 auto", display: "grid", gap: 22 }}>
-        <header style={{ display: "flex", justifyContent: "space-between", gap: 18, alignItems: "end", borderBottom: "1px solid " + colors.line, paddingBottom: 18 }}>
-          <div><h1 style={{ margin: 0, fontSize: "clamp(34px, 6vw, 64px)", lineHeight: .96 }}>Agent Observe Report</h1><p style={{ margin: "8px 0 0", color: colors.muted }}>Initial scan scope: <strong>{data.selected}</strong></p></div>
-          <p style={{ maxWidth: 330, margin: 0, color: colors.muted, borderLeft: "3px solid #1b7c55", paddingLeft: 12 }}>Your code stayed local. Generated at <code>{data.generatedAt}</code>.</p>
-        </header>
-        <section style={{ border: "1px solid " + colors.line, borderRadius: 8, background: colors.panel, padding: 18 }}>
-          <h2 style={{ margin: "0 0 12px" }}>Overall</h2>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 10 }}>{summary.map(([label, value]) => <Metric key={label} label={label} value={value} />)}</div>
-        </section>
-        <section style={{ border: "1px solid " + colors.line, borderRadius: 8, background: colors.panel, padding: 18 }}>
-          <h2 style={{ margin: "0 0 12px" }}>Agents</h2>
+    <main style={{ minHeight: "100vh", background: "#fff", color: "#171717", padding: "64px 24px 96px", fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif" }}>
+      <div style={{ maxWidth: 1152, margin: "0 auto", display: "grid", gap: 24 }}>
+        <div><h1 style={{ margin: 0, fontSize: "clamp(2rem, 5vw, 3.25rem)", fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.05 }}>Results</h1><p style={{ margin: "12px 0 0", color: "#737373", fontSize: 15 }}>Scope: <strong style={{ color: "#171717" }}>{data.selected}</strong> · Generated {data.generatedAt}</p></div>
+        <section style={{ border: "1px solid #e5e5e5", borderRadius: 16, background: "#fff", padding: "24px 32px", boxShadow: "0 1px 2px rgba(0,0,0,0.04)" }}>
+          <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 600 }}>Agents</h2>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center" }}>{data.agents.map((item: any) => <button key={item.id} type="button" onClick={() => setAgentId(item.id)} style={{ minWidth: 150, border: "2px solid " + (item.id === agentId ? colors.blue : "#1f271d"), borderRadius: 8, background: "#fff", color: item.id === agentId ? colors.blue : colors.ink, padding: "16px 18px", cursor: "pointer", font: "inherit", fontWeight: 760 }}>{item.name}</button>)}</div>
         </section>
         <section style={{ border: "1px solid " + colors.line, borderRadius: 8, background: colors.panel, padding: 18, display: "grid", gridTemplateColumns: "minmax(260px, .95fr) minmax(300px, 1.05fr)", gap: 28 }}>
