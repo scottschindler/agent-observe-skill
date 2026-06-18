@@ -1,77 +1,86 @@
 <!doctype html>
 <html lang="en">
-  <head>
+<head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Observe — Demo</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23101410'/%3E%3Cpath d='M16 32c5-9 11-13 16-13s11 4 16 13c-5 9-11 13-16 13s-11-4-16-13Z' fill='none' stroke='%23f4f7ef' stroke-width='5' stroke-linejoin='round'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%232f80ed'/%3E%3C/svg%3E" />
     <meta name="description" content="Local Agent Observe scan results for prompts, tools, model calls, routes, and risks." />
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css" />
     <script>
       tailwind.config = {
         theme: {
           extend: {
             fontFamily: {
-              sans: ["Inter", "sans-serif"],
-              mono: ["JetBrains Mono", "monospace"],
-            },
-            colors: {
-              gray: {
-                50: "#fafafa",
-                100: "#f5f5f5",
-                200: "#e5e5e5",
-                300: "#d4d4d4",
-                400: "#a3a3a3",
-                500: "#737373",
-                600: "#525252",
-                700: "#404040",
-                800: "#262626",
-                900: "#171717",
-              },
+              sans: ["Geist", "ui-sans-serif", "system-ui", "sans-serif"],
+              mono: ["Geist Mono", "ui-monospace", "monospace"],
             },
           },
         },
       };
     </script>
     <style>
-      body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+      html { color-scheme: dark; }
+      body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; background: #000; color: #ededed; }
+      .v-grid-bg { background-image: linear-gradient(to right, rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.04) 1px, transparent 1px); background-size: 64px 64px; mask-image: radial-gradient(ellipse 85% 65% at 50% 0%, #000 30%, transparent 100%); }
+      .v-glow { background: radial-gradient(ellipse 70% 55% at 50% -10%, rgba(0,112,243,0.18), transparent 65%); }
       .flow-step-nested .flow-rail { padding-left: 0.35rem; }
       .flow-step-nested .flow-card { margin-left: 0.25rem; }
       #flow-timeline { padding-left: 0.15rem; }
     </style>
   </head>
-  <body class="bg-white text-gray-900 selection:bg-gray-900 selection:text-white min-h-screen flex flex-col relative overflow-x-hidden">
-    <header class="w-full max-w-6xl mx-auto px-6 pt-6 relative z-10 flex justify-end"><a href="../" class="text-[13px] text-gray-500 hover:text-gray-900">Back</a></header>
-    <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[400px] opacity-[0.15] pointer-events-none" style="background: radial-gradient(ellipse at top, #000000 0%, transparent 70%)"></div>
-    <main class="flex-grow w-full max-w-6xl mx-auto px-6 pt-6 pb-16 relative z-10 space-y-4">
+  <link rel="stylesheet" href="../assets/theme.css" />
+  <body class="bg-black text-[#ededed] selection:bg-[#0070f3] selection:text-white min-h-screen flex flex-col relative overflow-x-hidden font-sans">
+    <div class="v-grid-bg fixed inset-0 pointer-events-none" aria-hidden="true"></div>
+    <div class="v-glow fixed inset-x-0 top-0 h-[420px] pointer-events-none" aria-hidden="true"></div>
+    <header class="v-nav sticky top-0 z-50 relative">
+      <div class="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
+        <div class="flex items-center gap-3 text-sm">
+          <span class="v-pill">ai@6.0.0</span>
+          <span class="text-[#666] hidden sm:inline">3 agents · 13 risks</span>
+        </div>
+        <nav class="flex items-center gap-5 text-sm">
+          <a href="../" class="text-[#888] hover:text-[#ededed] transition-colors">Home</a>
+          <a href="https://github.com/scottschindler/agent-observe-skill" class="text-[#888] hover:text-[#ededed] transition-colors" target="_blank" rel="noopener noreferrer">GitHub</a>
+        </nav>
+      </div>
+    </header>
+    <main class="flex-grow w-full max-w-[1500px] mx-auto px-6 pt-4 pb-16 relative z-10 space-y-4">
       <div>
         <div class="flex flex-wrap gap-2 mb-3" id="agents" aria-label="Select agent"></div>
-        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900" id="agent-name">Results</h1>
-        <p class="mt-1 max-w-3xl text-[15px] leading-relaxed text-gray-600" id="agent-description"></p>
-        <p class="mt-1 text-[13px] text-gray-500">Scope: <span class="font-medium text-gray-900">All detected agents</span> · 2026-05-29T18:05:24.559Z</p>
+        <h1 class="text-2xl sm:text-3xl font-semibold tracking-[-0.03em] text-[#ededed]" id="agent-name">Results</h1>
+        <p class="mt-1 max-w-3xl text-[15px] leading-relaxed text-[#888]" id="agent-description"></p>
+        <p class="mt-1 text-[13px] text-[#666]">Scope: <span class="font-medium text-[#ededed]">All detected agents</span> · AI SDK: <span class="font-medium text-[#3291ff]">ai@6.0.0</span> · 2026-06-18T03:29:46.948Z</p>
+        <p class="mt-1 text-[13px] text-[#666]" id="scan-diff-banner"></p>
       </div>
-      <section class="p-4 sm:p-5 rounded-2xl border border-gray-200 bg-white shadow-sm" aria-label="Agent execution flow">
+      <section class="p-4 sm:p-5 rounded-xl border border-[#333] bg-[#0a0a0a]" aria-label="Agent execution flow">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p class="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1" id="section-kicker">User journey</p>
-            <p class="text-[12px] text-gray-500 leading-relaxed" id="flow-note"></p>
+            <p class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#666] mb-1" id="section-kicker">User journey</p>
+            <p class="text-[12px] text-[#888] leading-relaxed" id="flow-note"></p>
           </div>
-          <div class="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1" id="view-tabs" aria-label="Report view"></div>
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="hidden sm:flex items-center gap-2" id="risk-filters" aria-label="Risk severity filters"></div>
+            <input type="search" id="report-search" placeholder="Search steps & risks…" class="rounded-lg border border-[#333] bg-[#111] px-3 py-1.5 text-sm text-[#ededed] placeholder:text-[#666] focus:outline-none focus:ring-2 focus:ring-[#0070f3]/30 focus:border-[#0070f3]" />
+            <button type="button" id="copy-agent-context" class="rounded-lg border border-[#333] bg-[#111] px-3 py-1.5 text-xs font-medium text-[#ededed] hover:bg-[#1a1a1a] hover:border-[#555]">Copy agent context</button>
+            <div class="inline-flex rounded-lg border border-[#333] bg-[#111] p-1" id="view-tabs" aria-label="Report view"></div>
+          </div>
         </div>
-        <div class="grid lg:grid-cols-[minmax(300px,1fr)_minmax(300px,1fr)] gap-8 lg:gap-10 items-start">
-          <div class="max-h-[min(72vh,720px)] overflow-y-auto pr-2 -mr-2" id="flow-timeline"></div>
+        <div id="mermaid-flow" class="mb-4 hidden rounded-xl border border-[#333] bg-[#050505] p-4 overflow-x-auto"></div>
+        <div class="grid xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)] gap-6 lg:gap-8 items-start">
+          <div class="max-h-[min(76vh,820px)] overflow-y-auto pr-2 -mr-2" id="flow-timeline"></div>
           <div class="lg:sticky lg:top-6">
-            <div class="text-[13px] font-semibold uppercase tracking-wide text-gray-500 mb-3" id="detail-title">Step details</div>
-            <div class="min-h-[280px] rounded-xl border border-gray-200 bg-white p-5 shadow-sm" id="detail-box"></div>
+            <div class="text-[13px] font-semibold uppercase tracking-[0.1em] text-[#666] mb-3" id="detail-title">Step details</div>
+            <div class="min-h-[560px] rounded-xl border border-[#333] bg-[#0a0a0a] p-5" id="detail-box"></div>
           </div>
         </div>
       </section>
     </main>
     <script>
-      const trace = {"generatedAt":"2026-05-29T18:05:24.559Z","root":"/Users/scottschindler/Documents/agent-observe/agent-observe-skill/fixtures/sample-agent","scanner":"agent-observe-skill.sh","selection":{"selectedAgent":null,"selectedAgents":[],"label":"All detected agents","mode":"single-or-none"},"summary":{"agents":1,"prompts":1,"tools":2,"chains":1,"routes":1,"uiEntrypoints":1,"risks":5},"flows":{"route:chat":[{"phase":"entry","kind":"entrypoints","id":"ui:components/chat.tsx:5:useChat","title":"User sends a chat message","subtitle":"useChat · components/chat.tsx:5 -> \"/api/chat\"","note":"This is where a person starts the AI flow in the product.","order":1},{"phase":"route","kind":"routes","id":"route:app/api/chat/route.ts:1","title":"App sends the message to the backend","subtitle":"POST · app/api/chat/route.ts","note":"The app hands the user's message to server-side code before the AI runs.","order":2},{"phase":"prompt","kind":"prompts","id":"prompt:app/api/chat/route.ts:20:system:1","title":"System instructions are added","subtitle":"You are a support agent. Be concise.","note":"These instructions shape how the AI should behave before it answers.","order":3},{"phase":"model","kind":"chains","id":"chain:app/api/chat/route.ts:18:streamtext","title":"AI generates a response","subtitle":"streamText · openai(\"gpt-4.1-mini\") · app/api/chat/route.ts:18","note":"The model reads the message, instructions, and available tools, then produces the next response.","order":4},{"phase":"tool","kind":"tools","id":"tool:app/api/chat/route.ts:5:searchOrders","title":"AI can look up information","subtitle":"searchOrders · orderId","note":"The AI can call this helper to fetch information before answering.","nested":true,"order":5},{"phase":"side-effect","kind":"tools","id":"tool:app/api/chat/route.ts:11:refundUser","title":"AI can change something outside the chat","subtitle":"refundUser · app/api/chat/route.ts:11","note":"This helper can change external state, so it needs extra review, permissions, and logging.","nested":true,"order":6},{"phase":"output","kind":"chains","id":"chain:app/api/chat/route.ts:18:streamtext:output","title":"User receives the answer","subtitle":"Streamed tokens to the client (data stream)","note":"The result is sent back to the product experience for the user to see.","order":7}]},"flowNote":"This is the likely product journey from user action to AI response. It is inferred from static code, so runtime tool order may differ.","agents":[{"id":"route:chat","name":"Chat","source":"api-route","files":["app/api/chat/route.ts","components/chat.tsx"],"evidence":[{"file":"app/api/chat/route.ts","line":1,"kind":"route"},{"file":"app/api/chat/route.ts","line":20,"kind":"prompt"},{"file":"app/api/chat/route.ts","line":5,"kind":"tool"},{"file":"app/api/chat/route.ts","line":11,"kind":"tool"},{"file":"app/api/chat/route.ts","line":18,"kind":"chain"},{"file":"components/chat.tsx","line":5,"kind":"ui"}],"counts":{"prompts":1,"tools":2,"chains":1,"routes":1,"uiEntrypoints":1,"risks":5},"description":"Static scan inference: Chat is detected from route POST /api/chat. It exposes POST /api/chat, has 1 client entry point, runs 1 model call (openai(\"gpt-4.1-mini\")), defines 2 tools (searchOrders, refundUser), uses 1 prompt.","score":22}],"prompts":[{"id":"prompt:app/api/chat/route.ts:20:system:1","file":"app/api/chat/route.ts","line":20,"agentId":"route:chat","kind":"system","inline":true,"valueType":"inline literal","preview":"You are a support agent. Be concise.","text":"You are a support agent. Be concise.","snippet":"    15 | });\n    16 | \n    17 | export async function POST() {\n    18 |   const result = await streamText({\n    19 |     model: openai(\"gpt-4.1-mini\"),\n>   20 |     system: `You are a support agent. Be concise.`,\n    21 |     tools: { searchOrders, refundUser },\n    22 |   });\n    23 |   return result.toDataStreamResponse();\n    24 | }\n    25 | ","evidence":"'You are a support agent. Be concise.'"}],"tools":[{"id":"tool:app/api/chat/route.ts:5:searchOrders","file":"app/api/chat/route.ts","line":5,"agentId":"route:chat","name":"searchOrders","description":"\"Find orders by id\"","descriptionFull":"\"Find orders by id\"","schema":"orderId","schemaFields":[{"name":"orderId","type":"z.string()"}],"hasInputSchema":true,"hasExecute":true,"sideEffect":false,"evidence":"tool({ description: \"Find orders by id\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => ({ orderId, status: \"shipped\" }), })","snippet":"     1 | import { streamText, tool } from \"ai\";\n     2 | import { openai } from \"@ai-sdk/openai\";\n     3 | import { z } from \"zod\";\n     4 | \n>    5 | const searchOrders = tool({\n     6 |   description: \"Find orders by id\",\n     7 |   inputSchema: z.object({ orderId: z.string() }),\n     8 |   execute: async ({ orderId }) => ({ orderId, status: \"shipped\" }),\n     9 | });\n    10 | "},{"id":"tool:app/api/chat/route.ts:11:refundUser","file":"app/api/chat/route.ts","line":11,"agentId":"route:chat","name":"refundUser","description":"\"Refund an order\"","descriptionFull":"\"Refund an order\"","schema":"orderId","schemaFields":[{"name":"orderId","type":"z.string()"}],"hasInputSchema":true,"hasExecute":true,"sideEffect":true,"evidence":"tool({ description: \"Refund an order\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => fetch('/api/refund', { method: \"POST\", body: orderId }), })","snippet":"     6 |   description: \"Find orders by id\",\n     7 |   inputSchema: z.object({ orderId: z.string() }),\n     8 |   execute: async ({ orderId }) => ({ orderId, status: \"shipped\" }),\n     9 | });\n    10 | \n>   11 | const refundUser = tool({\n    12 |   description: \"Refund an order\",\n    13 |   inputSchema: z.object({ orderId: z.string() }),\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \"POST\", body: orderId }),\n    15 | });\n    16 | "}],"chains":[{"id":"chain:app/api/chat/route.ts:18:streamtext","file":"app/api/chat/route.ts","line":18,"agentId":"route:chat","type":"streamText","model":"openai(\"gpt-4.1-mini\")","modelFull":"openai(\"gpt-4.1-mini\")","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":[],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/api/chat/route.ts:5:searchOrders","tool:app/api/chat/route.ts:11:refundUser"],"hasEval":false,"hasTrace":false,"evidence":"streamText({ model: openai(\"gpt-4.1-mini\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })","snippet":"    13 |   inputSchema: z.object({ orderId: z.string() }),\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \"POST\", body: orderId }),\n    15 | });\n    16 | \n    17 | export async function POST() {\n>   18 |   const result = await streamText({\n    19 |     model: openai(\"gpt-4.1-mini\"),\n    20 |     system: `You are a support agent. Be concise.`,\n    21 |     tools: { searchOrders, refundUser },\n    22 |   });\n    23 |   return result.toDataStreamResponse();"}],"routes":[{"id":"route:app/api/chat/route.ts:1","file":"app/api/chat/route.ts","line":1,"kind":"app-router","methods":["POST"],"aiPatterns":["streamText"],"hasTrace":false,"snippet":">    1 | import { streamText, tool } from \"ai\";\n     2 | import { openai } from \"@ai-sdk/openai\";\n     3 | import { z } from \"zod\";\n     4 | \n     5 | const searchOrders = tool({\n     6 |   description: \"Find orders by id\",","agentId":"route:chat"}],"uiEntrypoints":[{"id":"ui:components/chat.tsx:5:useChat","file":"components/chat.tsx","line":5,"hook":"useChat","api":"\"/api/chat\"","evidence":"useChat({ api: \"/api/chat\" })","snippet":"     1 | \"use client\";\n     2 | import { useChat } from \"ai/react\";\n     3 | \n     4 | export function Chat() {\n>    5 |   return useChat({ api: \"/api/chat\" });\n     6 | }\n     7 | ","agentId":"route:chat"}],"modelCalls":[{"id":"chain:app/api/chat/route.ts:18:streamtext","file":"app/api/chat/route.ts","line":18,"agentId":"route:chat","type":"streamText","model":"openai(\"gpt-4.1-mini\")","modelFull":"openai(\"gpt-4.1-mini\")","prompts":["system: 'You are a support agent. Be concise.'"],"promptIds":[],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/api/chat/route.ts:5:searchOrders","tool:app/api/chat/route.ts:11:refundUser"],"hasEval":false,"hasTrace":false,"evidence":"streamText({ model: openai(\"gpt-4.1-mini\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })","snippet":"    13 |   inputSchema: z.object({ orderId: z.string() }),\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \"POST\", body: orderId }),\n    15 | });\n    16 | \n    17 | export async function POST() {\n>   18 |   const result = await streamText({\n    19 |     model: openai(\"gpt-4.1-mini\"),\n    20 |     system: `You are a support agent. Be concise.`,\n    21 |     tools: { searchOrders, refundUser },\n    22 |   });\n    23 |   return result.toDataStreamResponse();"}],"risks":[{"id":"risk:app/api/chat/route.ts:20:inline-prompt:1","kind":"inline-prompt","severity":"medium","file":"app/api/chat/route.ts","line":20,"message":"Prompt is inline and harder to audit, diff, reuse, or cover with evals.","evidence":"You are a support agent. Be concise.","evidenceFull":"You are a support agent. Be concise.","fix":"Extract the prompt to a named constant or dedicated file, then add eval coverage.","targetId":"prompt:app/api/chat/route.ts:20:system:1","agentId":"route:chat"},{"id":"risk:app/api/chat/route.ts:11:side-effect-tool:2","kind":"side-effect-tool","severity":"high","file":"app/api/chat/route.ts","line":11,"message":"Tool refundUser appears to perform side effects and should have trace IDs, authorization checks, and tests.","evidence":"tool({ description: \"Refund an order\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => fetch('/api/refund', { method: \"POST\", body: orderId }), })","evidenceFull":"tool({ description: \"Refund an order\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => fetch('/api/refund', { method: \"POST\", body: orderId }), })","fix":"Add trace IDs, authorization checks, and integration tests for this tool's execute handler.","targetId":"tool:app/api/chat/route.ts:11:refundUser","agentId":"route:chat"},{"id":"risk:app/api/chat/route.ts:18:missing-eval:3","kind":"missing-eval","severity":"medium","file":"app/api/chat/route.ts","line":18,"message":"streamText chain lacks nearby eval or test evidence.","evidence":"streamText({ model: openai(\"gpt-4.1-mini\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })","evidenceFull":"streamText({\n    model: openai(\"gpt-4.1-mini\"),\n    system: `You are a support agent. Be concise.`,\n    tools: { searchOrders, refundUser },\n  })","fix":"Add promptfoo, vitest, or runtime evals near this chain.","targetId":"chain:app/api/chat/route.ts:18:streamtext","agentId":"route:chat"},{"id":"risk:app/api/chat/route.ts:18:missing-trace:4","kind":"missing-trace","severity":"high","file":"app/api/chat/route.ts","line":18,"message":"streamText chain lacks trace ID, structured logging, or AI telemetry evidence.","evidence":"streamText({ model: openai(\"gpt-4.1-mini\"), system: 'You are a support agent. Be concise.', tools: { searchOrders, refundUser }, })","evidenceFull":"streamText({\n    model: openai(\"gpt-4.1-mini\"),\n    system: `You are a support agent. Be concise.`,\n    tools: { searchOrders, refundUser },\n  })","fix":"Add traceId, structured logging, or AI SDK experimental_telemetry.","targetId":"chain:app/api/chat/route.ts:18:streamtext","agentId":"route:chat"},{"id":"risk:app/api/chat/route.ts:1:route-without-trace:5","kind":"route-without-trace","severity":"high","file":"app/api/chat/route.ts","line":1,"message":"AI route app/api/chat/route.ts exposes streamText without trace evidence.","evidence":"streamText","evidenceFull":"streamText","fix":"Instrument this API route with trace metadata before model calls return.","targetId":"route:app/api/chat/route.ts:1","agentId":"route:chat"}],"markdownReport":"# Agent Observe Report\n\nGenerated 2026-05-29T18:05:24.559Z from `/Users/scottschindler/Documents/agent-observe/agent-observe-skill/fixtures/sample-agent`.\n\n## Summary\n\n- Agent selection: All detected agents\n- Agent candidates detected: 1\n- Prompts detected: 1\n- Tools detected: 2\n- Chains/model calls detected: 1\n- API routes detected: 1\n- UI entrypoints detected: 1\n- Risks detected: 5\n\n## Agent Candidates\n\n- Chat (route:chat) files: app/api/chat/route.ts, components/chat.tsx. Static scan inference: Chat is detected from route POST /api/chat. It exposes POST /api/chat, has 1 client entry point, runs 1 model call (openai(\"gpt-4.1-mini\")), defines 2 tools (searchOrders, refundUser), uses 1 prompt.\n\n## Where are prompts defined?\n\n- `app/api/chat/route.ts:20` system (inline literal): You are a support agent. Be concise.\n\n## Which model calls use which prompts?\n\n- `app/api/chat/route.ts:18` streamText uses system: 'You are a support agent. Be concise.'.\n\n## Which tools can each chain call?\n\n- `app/api/chat/route.ts:18` streamText: searchOrders, refundUser.\n\n## What schemas do tools expose?\n\n- `searchOrders` at `app/api/chat/route.ts:5`: orderId.\n- `refundUser` at `app/api/chat/route.ts:11`: orderId.\n\n## Which tools have side effects?\n\n- `refundUser` at `app/api/chat/route.ts:11`.\n\n## Which routes expose AI behavior?\n\n- `app/api/chat/route.ts`: streamText.\n\n## Which chains lack evals?\n\n- `app/api/chat/route.ts:18` streamText.\n\n## Which chains lack trace IDs or logging?\n\n- `app/api/chat/route.ts:18` streamText.\n\n## Which prompts are inline and hard to audit?\n\n- `app/api/chat/route.ts:20` system: You are a support agent. Be concise.\n\n"};
+      const trace = {"generatedAt":"2026-06-18T03:29:46.948Z","root":"/sample-agent","scanner":"agent-observe-skill.sh","selection":{"selectedAgent":null,"selectedAgents":[],"label":"All detected agents","mode":"all-agents"},"aiSdk":{"version":"6.0.0","major":6,"source":"package.json","usesStopWhen":true,"usesMaxSteps":false,"label":"ai@6.0.0"},"scanDiff":null,"summary":{"agents":3,"prompts":3,"tools":4,"chains":3,"routes":1,"uiEntrypoints":1,"risks":13,"highRisks":5,"mediumRisks":8,"mcpClients":0,"models":1},"flows":{"route:chat":[{"phase":"entry","kind":"entrypoints","id":"ui:components/chat.tsx:5:useChat","title":"User sends a chat message","subtitle":"useChat · components/chat.tsx:5 -> \"/api/chat\"","note":"This is where a person starts the AI flow in the product.","order":1},{"phase":"route","kind":"routes","id":"route:app/api/chat/route.ts:1","title":"App sends the message to the backend","subtitle":"POST · app/api/chat/route.ts","note":"The app hands the user's message to server-side code before the AI runs.","order":2},{"phase":"prompt","kind":"prompts","id":"prompt:app/api/chat/route.ts:21:system:1","title":"System instructions are added","subtitle":"You are a support agent. User said: ${body.message}","note":"These instructions shape how the AI should behave before it answers.","order":3},{"phase":"model","kind":"chains","id":"chain:app/api/chat/route.ts:19:streamtext","title":"AI generates a response","subtitle":"streamText · openai(\"gpt-4.1-mini\") · app/api/chat/route.ts:19","note":"The model reads the message, instructions, and available tools, then produces the next response.","order":4},{"phase":"tool","kind":"tools","id":"tool:app/api/chat/route.ts:5:searchOrders","title":"AI can look up information","subtitle":"searchOrders · orderId","note":"The AI can call this helper to fetch information before answering.","nested":true,"order":5},{"phase":"side-effect","kind":"tools","id":"tool:app/api/chat/route.ts:11:refundUser","title":"AI can change something outside the chat","subtitle":"refundUser · app/api/chat/route.ts:11","note":"This helper can change external state, so it needs extra review, permissions, and logging.","nested":true,"order":6},{"phase":"output","kind":"chains","id":"chain:app/api/chat/route.ts:19:streamtext:output","title":"User receives the answer","subtitle":"Streamed model output (streamText)","note":"The result is sent back to the product experience for the user to see.","order":7}],"code:checkoutagent":[{"phase":"prompt","kind":"prompts","id":"prompt:lib/checkout-agent.ts:18:instructions:2","title":"System instructions are added","subtitle":"You are a checkout assistant.","note":"These instructions shape how the AI should behave before it answers.","order":1},{"phase":"model","kind":"chains","id":"chain:lib/checkout-agent.ts:16:ToolLoopAgent","title":"AI generates a response","subtitle":"ToolLoopAgent · openai(\"gpt-4.1-mini\") · lib/checkout-agent.ts:16","note":"The model reads the message, instructions, and available tools, then produces the next response.","order":2},{"phase":"tool","kind":"tools","id":"tool:lib/checkout-agent.ts:11:done","title":"AI can look up information","subtitle":"done · summary","note":"The AI can call this helper to fetch information before answering.","nested":true,"order":3},{"phase":"side-effect","kind":"tools","id":"tool:lib/checkout-agent.ts:5:chargeCard","title":"AI can change something outside the chat","subtitle":"chargeCard · lib/checkout-agent.ts:5","note":"This helper can change external state, so it needs extra review, permissions, and logging.","nested":true,"order":4},{"phase":"output","kind":"chains","id":"chain:lib/checkout-agent.ts:16:ToolLoopAgent:output","title":"User receives the answer","subtitle":"Response returned to caller","note":"The result is sent back to the product experience for the user to see.","order":5}],"file:unbounded-agent":[{"phase":"prompt","kind":"prompts","id":"prompt:lib/unbounded-agent.ts:7:prompt:3","title":"User instructions are added","subtitle":"Research this topic thoroughly","note":"These instructions shape how the AI should behave before it answers.","order":1},{"phase":"model","kind":"chains","id":"chain:lib/unbounded-agent.ts:5:generatetext","title":"AI generates a response","subtitle":"generateText · openai(\"gpt-4.1-mini\") · lib/unbounded-agent.ts:5","note":"The model reads the message, instructions, and available tools, then produces the next response.","order":2},{"phase":"output","kind":"chains","id":"chain:lib/unbounded-agent.ts:5:generatetext:output","title":"User receives the answer","subtitle":"Generated text returned to caller","note":"The result is sent back to the product experience for the user to see.","order":3}]},"flowNote":"This is the likely product journey from user action to AI response. It is inferred from static code, so runtime tool order may differ.","agentContexts":{"route:chat":"# Chat context\n\nStatic scan inference: Chat is detected from route POST /api/chat. It exposes POST /api/chat, has 1 client entry point, runs 1 model call (openai(\"gpt-4.1-mini\")), defines 2 tools (searchOrders, refundUser), uses 1 prompt.\n\n## Routes\n- app/api/chat/route.ts (POST)\n\n## Chains\n- streamText at app/api/chat/route.ts:19 model=openai(\"gpt-4.1-mini\")\n\n## Tools\n- searchOrders: \"Find orders by id\" (read)\n- refundUser: \"Refund an order\" (side-effect)\n\n## Risks\n- [medium] Prompt is inline and harder to audit, diff, reuse, or cover with evals.\n- [high] Tool refundUser performs side effects without needsApproval — add human-in-the-loop before destructive actions.\n- [medium] streamText records inputs/outputs while prompts appear to include user content — disable recordInputs/recordOutputs for PII.\n- [medium] streamText chain lacks nearby eval or test evidence.","code:checkoutagent":"# checkoutAgent context\n\nStatic scan inference: checkoutAgent is detected from file lib/checkout-agent.ts. It runs 1 model call (openai(\"gpt-4.1-mini\")), defines 2 tools (chargeCard, done), uses 1 prompt.\n\n## Routes\n\n## Chains\n- ToolLoopAgent at lib/checkout-agent.ts:16 model=openai(\"gpt-4.1-mini\")\n\n## Tools\n- chargeCard: \"Charge the customer card\" (side-effect)\n- done: \"Signal checkout completion\" (read)\n\n## Risks\n- [medium] Prompt is inline and harder to audit, diff, reuse, or cover with evals.\n- [high] Tool chargeCard performs side effects without needsApproval — add human-in-the-loop before destructive actions.\n- [high] ToolLoopAgent chain lacks trace ID, structured logging, or AI telemetry evidence.\n- [medium] ToolLoopAgent chain lacks nearby eval or test evidence.","file:unbounded-agent":"# Unbounded Agent context\n\nStatic scan inference: Unbounded Agent is detected from file lib/unbounded-agent.ts. It runs 1 model call (openai(\"gpt-4.1-mini\")), uses 1 prompt.\n\n## Routes\n\n## Chains\n- generateText at lib/unbounded-agent.ts:5 model=openai(\"gpt-4.1-mini\")\n\n## Tools\n\n## Risks\n- [medium] Prompt is inline and harder to audit, diff, reuse, or cover with evals.\n- [high] generateText uses isLoopFinished() without stepCountIs or hasToolCall bounds — unbounded loop / cost risk.\n- [high] generateText chain lacks trace ID, structured logging, or AI telemetry evidence.\n- [medium] generateText chain lacks nearby eval or test evidence."},"agents":[{"id":"route:chat","name":"Chat","source":"api-route","files":["app/api/chat/route.ts","components/chat.tsx"],"evidence":[{"file":"app/api/chat/route.ts","line":1,"kind":"route"},{"file":"app/api/chat/route.ts","line":21,"kind":"prompt"},{"file":"app/api/chat/route.ts","line":5,"kind":"tool"},{"file":"app/api/chat/route.ts","line":11,"kind":"tool"},{"file":"app/api/chat/route.ts","line":19,"kind":"chain"},{"file":"components/chat.tsx","line":5,"kind":"ui"}],"counts":{"prompts":1,"tools":2,"chains":1,"routes":1,"uiEntrypoints":1,"risks":4},"description":"Static scan inference: Chat is detected from route POST /api/chat. It exposes POST /api/chat, has 1 client entry point, runs 1 model call (openai(\"gpt-4.1-mini\")), defines 2 tools (searchOrders, refundUser), uses 1 prompt.","score":21},{"id":"code:checkoutagent","name":"checkoutAgent","source":"code-symbol","files":["lib/checkout-agent.ts"],"evidence":[{"file":"lib/checkout-agent.ts","line":18,"kind":"prompt"},{"file":"lib/checkout-agent.ts","line":16,"kind":"chain"}],"counts":{"prompts":1,"tools":2,"chains":1,"routes":0,"uiEntrypoints":0,"risks":4},"description":"Static scan inference: checkoutAgent is detected from file lib/checkout-agent.ts. It runs 1 model call (openai(\"gpt-4.1-mini\")), defines 2 tools (chargeCard, done), uses 1 prompt.","score":14},{"id":"file:unbounded-agent","name":"Unbounded Agent","source":"file","files":["lib/unbounded-agent.ts"],"evidence":[{"file":"lib/unbounded-agent.ts","line":7,"kind":"prompt"},{"file":"lib/unbounded-agent.ts","line":5,"kind":"chain"}],"counts":{"prompts":1,"tools":0,"chains":1,"routes":0,"uiEntrypoints":0,"risks":4},"description":"Static scan inference: Unbounded Agent is detected from file lib/unbounded-agent.ts. It runs 1 model call (openai(\"gpt-4.1-mini\")), uses 1 prompt.","score":10}],"prompts":[{"id":"prompt:app/api/chat/route.ts:21:system:1","file":"app/api/chat/route.ts","line":21,"agentId":"route:chat","kind":"system","inline":true,"valueType":"inline literal","preview":"You are a support agent. User said: ${body.message}","text":"You are a support agent. User said: ${body.message}","snippet":"    16 | \n    17 | export async function POST(req: Request) {\n    18 |   const body = await req.json();\n    19 |   const result = await streamText({\n    20 |     model: openai(\"gpt-4.1-mini\"),\n>   21 |     system: `You are a support agent. User said: ${body.message}`,\n    22 |     tools: { searchOrders, refundUser },\n    23 |     stopWhen: stepCountIs(8),\n    24 |     experimental_telemetry: {\n    25 |       isEnabled: true,\n    26 |       functionId: \"support-chat\",","evidence":"'You are a support agent. User said: ${body.message}'"},{"id":"prompt:lib/checkout-agent.ts:18:instructions:2","file":"lib/checkout-agent.ts","line":18,"agentId":"code:checkoutagent","kind":"instructions","inline":true,"valueType":"inline literal","preview":"You are a checkout assistant.","text":"You are a checkout assistant.","snippet":"    13 |   inputSchema: z.object({ summary: z.string() }),\n    14 | });\n    15 | \n    16 | export const checkoutAgent = new ToolLoopAgent({\n    17 |   model: openai(\"gpt-4.1-mini\"),\n>   18 |   instructions: \"You are a checkout assistant.\",\n    19 |   tools: { chargeCard, done },\n    20 |   stopWhen: stepCountIs(5),\n    21 |   toolChoice: \"required\",\n    22 | });\n    23 | ","evidence":"\"You are a checkout assistant.\""},{"id":"prompt:lib/unbounded-agent.ts:7:prompt:3","file":"lib/unbounded-agent.ts","line":7,"agentId":"file:unbounded-agent","kind":"prompt","inline":true,"valueType":"inline literal","preview":"Research this topic thoroughly","text":"Research this topic thoroughly","snippet":"     2 | import { openai } from \"@ai-sdk/openai\";\n     3 | \n     4 | export async function runUnbounded() {\n     5 |   return generateText({\n     6 |     model: openai(\"gpt-4.1-mini\"),\n>    7 |     prompt: \"Research this topic thoroughly\",\n     8 |     stopWhen: isLoopFinished(),\n     9 |   });\n    10 | }\n    11 | ","evidence":"\"Research this topic thoroughly\""}],"tools":[{"id":"tool:app/api/chat/route.ts:5:searchOrders","file":"app/api/chat/route.ts","line":5,"agentId":"route:chat","name":"searchOrders","description":"\"Find orders by id\"","descriptionFull":"\"Find orders by id\"","schema":"orderId","schemaFields":[{"name":"orderId","type":"z.string()"}],"hasInputSchema":true,"hasExecute":true,"needsApproval":false,"sideEffect":false,"evidence":"tool({ description: \"Find orders by id\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => ({ orderId, status: \"shipped\" }), })","snippet":"     1 | import { streamText, tool, stepCountIs } from \"ai\";\n     2 | import { openai } from \"@ai-sdk/openai\";\n     3 | import { z } from \"zod\";\n     4 | \n>    5 | const searchOrders = tool({\n     6 |   description: \"Find orders by id\",\n     7 |   inputSchema: z.object({ orderId: z.string() }),\n     8 |   execute: async ({ orderId }) => ({ orderId, status: \"shipped\" }),\n     9 | });\n    10 | "},{"id":"tool:app/api/chat/route.ts:11:refundUser","file":"app/api/chat/route.ts","line":11,"agentId":"route:chat","name":"refundUser","description":"\"Refund an order\"","descriptionFull":"\"Refund an order\"","schema":"orderId","schemaFields":[{"name":"orderId","type":"z.string()"}],"hasInputSchema":true,"hasExecute":true,"needsApproval":false,"sideEffect":true,"evidence":"tool({ description: \"Refund an order\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => fetch('/api/refund', { method: \"POST\", body: orderId }), })","snippet":"     6 |   description: \"Find orders by id\",\n     7 |   inputSchema: z.object({ orderId: z.string() }),\n     8 |   execute: async ({ orderId }) => ({ orderId, status: \"shipped\" }),\n     9 | });\n    10 | \n>   11 | const refundUser = tool({\n    12 |   description: \"Refund an order\",\n    13 |   inputSchema: z.object({ orderId: z.string() }),\n    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \"POST\", body: orderId }),\n    15 | });\n    16 | "},{"id":"tool:lib/checkout-agent.ts:5:chargeCard","file":"lib/checkout-agent.ts","line":5,"agentId":"code:checkoutagent","name":"chargeCard","description":"\"Charge the customer card\"","descriptionFull":"\"Charge the customer card\"","schema":"amount","schemaFields":[{"name":"amount","type":"z.number()"}],"hasInputSchema":true,"hasExecute":true,"needsApproval":false,"sideEffect":true,"evidence":"tool({ description: \"Charge the customer card\", inputSchema: z.object({ amount: z.number() }), execute: async ({ amount }) => fetch(\"/api/charge\", { method: \"POST\", body: String(amount) }), })","snippet":"     1 | import { ToolLoopAgent, stepCountIs, tool } from \"ai\";\n     2 | import { openai } from \"@ai-sdk/openai\";\n     3 | import { z } from \"zod\";\n     4 | \n>    5 | const chargeCard = tool({\n     6 |   description: \"Charge the customer card\",\n     7 |   inputSchema: z.object({ amount: z.number() }),\n     8 |   execute: async ({ amount }) => fetch(\"/api/charge\", { method: \"POST\", body: String(amount) }),\n     9 | });\n    10 | "},{"id":"tool:lib/checkout-agent.ts:11:done","file":"lib/checkout-agent.ts","line":11,"agentId":"code:checkoutagent","name":"done","description":"\"Signal checkout completion\"","descriptionFull":"\"Signal checkout completion\"","schema":"summary","schemaFields":[{"name":"summary","type":"z.string()"}],"hasInputSchema":true,"hasExecute":false,"needsApproval":false,"sideEffect":false,"evidence":"tool({ description: \"Signal checkout completion\", inputSchema: z.object({ summary: z.string() }), })","snippet":"     6 |   description: \"Charge the customer card\",\n     7 |   inputSchema: z.object({ amount: z.number() }),\n     8 |   execute: async ({ amount }) => fetch(\"/api/charge\", { method: \"POST\", body: String(amount) }),\n     9 | });\n    10 | \n>   11 | const done = tool({\n    12 |   description: \"Signal checkout completion\",\n    13 |   inputSchema: z.object({ summary: z.string() }),\n    14 | });\n    15 | \n    16 | export const checkoutAgent = new ToolLoopAgent({"}],"chains":[{"id":"chain:app/api/chat/route.ts:19:streamtext","file":"app/api/chat/route.ts","line":19,"agentId":"route:chat","type":"streamText","model":"openai(\"gpt-4.1-mini\")","modelFull":"openai(\"gpt-4.1-mini\")","prompts":["system: You are a support agent. User said: ${body.message}"],"promptIds":["prompt:app/api/chat/route.ts:21:system:1"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/api/chat/route.ts:5:searchOrders","tool:app/api/chat/route.ts:11:refundUser"],"hasEval":false,"hasTrace":true,"structuredOutput":false,"evidence":"streamText({ model: openai(\"gpt-4.1-mini\"), system: 'You are a support agent. User said: ${body.message}', tools: { searchOrders, refundUser }, stopWhen: stepCountIs(8), experimental_telemetry: { isEnabled: true, functionId: \"support-chat\", recordInputs: true...","snippet":"    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \"POST\", body: orderId }),\n    15 | });\n    16 | \n    17 | export async function POST(req: Request) {\n    18 |   const body = await req.json();\n>   19 |   const result = await streamText({\n    20 |     model: openai(\"gpt-4.1-mini\"),\n    21 |     system: `You are a support agent. User said: ${body.message}`,\n    22 |     tools: { searchOrders, refundUser },\n    23 |     stopWhen: stepCountIs(8),\n    24 |     experimental_telemetry: {","loop":{"stopWhen":"stepCountIs(8)","maxSteps":"","prepareStep":false,"onStepFinish":false,"toolChoice":"","activeTools":"","hasStopWhen":true,"stepCount":"8","isUnbounded":false,"toolChoiceRequired":false},"telemetry":{"hasTelemetry":true,"isEnabled":true,"hasFunctionId":true,"recordInputsOn":true,"recordOutputsOn":true,"raw":"{ isEnabled: true, functionId: \"support-chat\", recordInputs: true, recordOutputs: true, }"}},{"id":"chain:lib/checkout-agent.ts:16:ToolLoopAgent","file":"lib/checkout-agent.ts","line":16,"agentId":"code:checkoutagent","type":"ToolLoopAgent","model":"openai(\"gpt-4.1-mini\")","modelFull":"openai(\"gpt-4.1-mini\")","prompts":["instructions: You are a checkout assistant."],"promptIds":["prompt:lib/checkout-agent.ts:18:instructions:2"],"tools":["chargeCard","done"],"toolIds":["tool:lib/checkout-agent.ts:5:chargeCard","tool:lib/checkout-agent.ts:11:done"],"hasEval":false,"hasTrace":false,"evidence":"new ToolLoopAgent({ model: openai(\"gpt-4.1-mini\"), instructions: \"You are a checkout assistant.\", tools: { chargeCard, done }, stopWhen: stepCountIs(5), toolChoice: \"required\", })","snippet":"    11 | const done = tool({\n    12 |   description: \"Signal checkout completion\",\n    13 |   inputSchema: z.object({ summary: z.string() }),\n    14 | });\n    15 | \n>   16 | export const checkoutAgent = new ToolLoopAgent({\n    17 |   model: openai(\"gpt-4.1-mini\"),\n    18 |   instructions: \"You are a checkout assistant.\",\n    19 |   tools: { chargeCard, done },\n    20 |   stopWhen: stepCountIs(5),\n    21 |   toolChoice: \"required\",","loop":{"stopWhen":"stepCountIs(5)","maxSteps":"","prepareStep":false,"onStepFinish":false,"toolChoice":"\"required\"","activeTools":"","hasStopWhen":true,"stepCount":"5","isUnbounded":false,"toolChoiceRequired":true},"telemetry":{"hasTelemetry":false,"isEnabled":false,"hasFunctionId":false,"recordInputsOn":false,"recordOutputsOn":false,"raw":""}},{"id":"chain:lib/unbounded-agent.ts:5:generatetext","file":"lib/unbounded-agent.ts","line":5,"agentId":"file:unbounded-agent","type":"generateText","model":"openai(\"gpt-4.1-mini\")","modelFull":"openai(\"gpt-4.1-mini\")","prompts":["prompt: Research this topic thoroughly"],"promptIds":["prompt:lib/unbounded-agent.ts:7:prompt:3"],"tools":[],"toolIds":[],"hasEval":false,"hasTrace":false,"structuredOutput":false,"evidence":"generateText({ model: openai(\"gpt-4.1-mini\"), prompt: \"Research this topic thoroughly\", stopWhen: isLoopFinished(), })","snippet":"     1 | import { generateText, isLoopFinished } from \"ai\";\n     2 | import { openai } from \"@ai-sdk/openai\";\n     3 | \n     4 | export async function runUnbounded() {\n>    5 |   return generateText({\n     6 |     model: openai(\"gpt-4.1-mini\"),\n     7 |     prompt: \"Research this topic thoroughly\",\n     8 |     stopWhen: isLoopFinished(),\n     9 |   });\n    10 | }","loop":{"stopWhen":"isLoopFinished()","maxSteps":"","prepareStep":false,"onStepFinish":false,"toolChoice":"","activeTools":"","hasStopWhen":true,"stepCount":"","isUnbounded":true,"toolChoiceRequired":false},"telemetry":{"hasTelemetry":false,"isEnabled":false,"hasFunctionId":false,"recordInputsOn":false,"recordOutputsOn":false,"raw":""}}],"routes":[{"id":"route:app/api/chat/route.ts:1","file":"app/api/chat/route.ts","line":1,"kind":"app-router","methods":["POST"],"aiPatterns":["streamText"],"hasTrace":true,"snippet":">    1 | import { streamText, tool, stepCountIs } from \"ai\";\n     2 | import { openai } from \"@ai-sdk/openai\";\n     3 | import { z } from \"zod\";\n     4 | \n     5 | const searchOrders = tool({\n     6 |   description: \"Find orders by id\",","agentId":"route:chat"}],"uiEntrypoints":[{"id":"ui:components/chat.tsx:5:useChat","file":"components/chat.tsx","line":5,"hook":"useChat","api":"\"/api/chat\"","evidence":"useChat({ api: \"/api/chat\" })","snippet":"     1 | \"use client\";\n     2 | import { useChat } from \"ai/react\";\n     3 | \n     4 | export function Chat() {\n>    5 |   return useChat({ api: \"/api/chat\" });\n     6 | }\n     7 | ","agentId":"route:chat"}],"modelCalls":[{"id":"chain:app/api/chat/route.ts:19:streamtext","file":"app/api/chat/route.ts","line":19,"agentId":"route:chat","type":"streamText","model":"openai(\"gpt-4.1-mini\")","modelFull":"openai(\"gpt-4.1-mini\")","prompts":["system: You are a support agent. User said: ${body.message}"],"promptIds":["prompt:app/api/chat/route.ts:21:system:1"],"tools":["searchOrders","refundUser"],"toolIds":["tool:app/api/chat/route.ts:5:searchOrders","tool:app/api/chat/route.ts:11:refundUser"],"hasEval":false,"hasTrace":true,"structuredOutput":false,"evidence":"streamText({ model: openai(\"gpt-4.1-mini\"), system: 'You are a support agent. User said: ${body.message}', tools: { searchOrders, refundUser }, stopWhen: stepCountIs(8), experimental_telemetry: { isEnabled: true, functionId: \"support-chat\", recordInputs: true...","snippet":"    14 |   execute: async ({ orderId }) => fetch(`/api/refund`, { method: \"POST\", body: orderId }),\n    15 | });\n    16 | \n    17 | export async function POST(req: Request) {\n    18 |   const body = await req.json();\n>   19 |   const result = await streamText({\n    20 |     model: openai(\"gpt-4.1-mini\"),\n    21 |     system: `You are a support agent. User said: ${body.message}`,\n    22 |     tools: { searchOrders, refundUser },\n    23 |     stopWhen: stepCountIs(8),\n    24 |     experimental_telemetry: {","loop":{"stopWhen":"stepCountIs(8)","maxSteps":"","prepareStep":false,"onStepFinish":false,"toolChoice":"","activeTools":"","hasStopWhen":true,"stepCount":"8","isUnbounded":false,"toolChoiceRequired":false},"telemetry":{"hasTelemetry":true,"isEnabled":true,"hasFunctionId":true,"recordInputsOn":true,"recordOutputsOn":true,"raw":"{ isEnabled: true, functionId: \"support-chat\", recordInputs: true, recordOutputs: true, }"}},{"id":"chain:lib/unbounded-agent.ts:5:generatetext","file":"lib/unbounded-agent.ts","line":5,"agentId":"file:unbounded-agent","type":"generateText","model":"openai(\"gpt-4.1-mini\")","modelFull":"openai(\"gpt-4.1-mini\")","prompts":["prompt: Research this topic thoroughly"],"promptIds":["prompt:lib/unbounded-agent.ts:7:prompt:3"],"tools":[],"toolIds":[],"hasEval":false,"hasTrace":false,"structuredOutput":false,"evidence":"generateText({ model: openai(\"gpt-4.1-mini\"), prompt: \"Research this topic thoroughly\", stopWhen: isLoopFinished(), })","snippet":"     1 | import { generateText, isLoopFinished } from \"ai\";\n     2 | import { openai } from \"@ai-sdk/openai\";\n     3 | \n     4 | export async function runUnbounded() {\n>    5 |   return generateText({\n     6 |     model: openai(\"gpt-4.1-mini\"),\n     7 |     prompt: \"Research this topic thoroughly\",\n     8 |     stopWhen: isLoopFinished(),\n     9 |   });\n    10 | }","loop":{"stopWhen":"isLoopFinished()","maxSteps":"","prepareStep":false,"onStepFinish":false,"toolChoice":"","activeTools":"","hasStopWhen":true,"stepCount":"","isUnbounded":true,"toolChoiceRequired":false},"telemetry":{"hasTelemetry":false,"isEnabled":false,"hasFunctionId":false,"recordInputsOn":false,"recordOutputsOn":false,"raw":""}}],"risks":[{"id":"risk:app/api/chat/route.ts:21:inline-prompt:1","kind":"inline-prompt","severity":"medium","file":"app/api/chat/route.ts","line":21,"message":"Prompt is inline and harder to audit, diff, reuse, or cover with evals.","evidence":"You are a support agent. User said: ${body.message}","evidenceFull":"You are a support agent. User said: ${body.message}","fix":"// prompts/chat.ts\nexport const chatSystem = `...`;\n\n// In your streamText call:\nsystem: chatSystem,","fixSnippet":"// prompts/chat.ts\nexport const chatSystem = `...`;\n\n// In your streamText call:\nsystem: chatSystem,","targetId":"prompt:app/api/chat/route.ts:21:system:1","agentId":"route:chat"},{"id":"risk:app/api/chat/route.ts:11:side-effect-without-approval:2","kind":"side-effect-without-approval","severity":"high","file":"app/api/chat/route.ts","line":11,"message":"Tool refundUser performs side effects without needsApproval — add human-in-the-loop before destructive actions.","evidence":"tool({ description: \"Refund an order\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => fetch('/api/refund', { method: \"POST\", body: orderId }), })","evidenceFull":"tool({ description: \"Refund an order\", inputSchema: z.object({ orderId: z.string() }), execute: async ({ orderId }) => fetch('/api/refund', { method: \"POST\", body: orderId }), })","fix":"needsApproval: true, // require human approval before refundUser runs","fixSnippet":"needsApproval: true, // require human approval before refundUser runs","targetId":"tool:app/api/chat/route.ts:11:refundUser","agentId":"route:chat"},{"id":"risk:app/api/chat/route.ts:19:telemetry-records-pii:3","kind":"telemetry-records-pii","severity":"medium","file":"app/api/chat/route.ts","line":19,"message":"streamText records inputs/outputs while prompts appear to include user content — disable recordInputs/recordOutputs for PII.","evidence":"{ isEnabled: true, functionId: \"support-chat\", recordInputs: true, recordOutputs: true, }","evidenceFull":"{ isEnabled: true, functionId: \"support-chat\", recordInputs: true, recordOutputs: true, }","fix":"experimental_telemetry: {\n  isEnabled: true,\n  functionId: 'chat_streamtext',\n  recordInputs: false,  // disable if prompts contain user PII\n  recordOutputs: false,\n},","fixSnippet":"experimental_telemetry: {\n  isEnabled: true,\n  functionId: 'chat_streamtext',\n  recordInputs: false,  // disable if prompts contain user PII\n  recordOutputs: false,\n},","targetId":"chain:app/api/chat/route.ts:19:streamtext","agentId":"route:chat"},{"id":"risk:app/api/chat/route.ts:19:missing-eval:4","kind":"missing-eval","severity":"medium","file":"app/api/chat/route.ts","line":19,"message":"streamText chain lacks nearby eval or test evidence.","evidence":"streamText({ model: openai(\"gpt-4.1-mini\"), system: 'You are a support agent. User said: ${body.message}', tools: { searchOrders, refundUser }, stopWhen: stepCountIs(8), experimental_telemetry: { isEnabled: true, functi...","evidenceFull":"streamText({\n    model: openai(\"gpt-4.1-mini\"),\n    system: `You are a support agent. User said: ${body.message}`,\n    tools: { searchOrders, refundUser },\n    stopWhen: stepCountIs(8),\n    experimental_telemetry: {\n      isEnabled: true,\n      functionId: \"support-chat\",\n      recordInputs: true,\n      recordOutputs: true,\n    },\n  })","fix":"// vitest or promptfoo near this chain\ndescribe('Chat', () => {\n  it('handles expected tool flow', async () => {\n    const result = await streamText({ /* ... */ });\n    expect(result.text).toBeTruthy();\n  });\n});","fixSnippet":"// vitest or promptfoo near this chain\ndescribe('Chat', () => {\n  it('handles expected tool flow', async () => {\n    const result = await streamText({ /* ... */ });\n    expect(result.text).toBeTruthy();\n  });\n});","targetId":"chain:app/api/chat/route.ts:19:streamtext","agentId":"route:chat"},{"id":"risk:lib/checkout-agent.ts:18:inline-prompt:5","kind":"inline-prompt","severity":"medium","file":"lib/checkout-agent.ts","line":18,"message":"Prompt is inline and harder to audit, diff, reuse, or cover with evals.","evidence":"You are a checkout assistant.","evidenceFull":"You are a checkout assistant.","fix":"// prompts/checkoutagent.ts\nexport const checkoutagentSystem = `...`;\n\n// In your streamText call:\nsystem: checkoutagentSystem,","fixSnippet":"// prompts/checkoutagent.ts\nexport const checkoutagentSystem = `...`;\n\n// In your streamText call:\nsystem: checkoutagentSystem,","targetId":"prompt:lib/checkout-agent.ts:18:instructions:2","agentId":"code:checkoutagent"},{"id":"risk:lib/checkout-agent.ts:5:side-effect-without-approval:6","kind":"side-effect-without-approval","severity":"high","file":"lib/checkout-agent.ts","line":5,"message":"Tool chargeCard performs side effects without needsApproval — add human-in-the-loop before destructive actions.","evidence":"tool({ description: \"Charge the customer card\", inputSchema: z.object({ amount: z.number() }), execute: async ({ amount }) => fetch(\"/api/charge\", { method: \"POST\", body: String(amount) }), })","evidenceFull":"tool({ description: \"Charge the customer card\", inputSchema: z.object({ amount: z.number() }), execute: async ({ amount }) => fetch(\"/api/charge\", { method: \"POST\", body: String(amount) }), })","fix":"needsApproval: true, // require human approval before chargeCard runs","fixSnippet":"needsApproval: true, // require human approval before chargeCard runs","targetId":"tool:lib/checkout-agent.ts:5:chargeCard","agentId":"code:checkoutagent"},{"id":"risk:lib/checkout-agent.ts:16:missing-trace:7","kind":"missing-trace","severity":"high","file":"lib/checkout-agent.ts","line":16,"message":"ToolLoopAgent chain lacks trace ID, structured logging, or AI telemetry evidence.","evidence":"new ToolLoopAgent({ model: openai(\"gpt-4.1-mini\"), instructions: \"You are a checkout assistant.\", tools: { chargeCard, done }, stopWhen: stepCountIs(5), toolChoice: \"required\", })","evidenceFull":"new ToolLoopAgent({\n  model: openai(\"gpt-4.1-mini\"),\n  instructions: \"You are a checkout assistant.\",\n  tools: { chargeCard, done },\n  stopWhen: stepCountIs(5),\n  toolChoice: \"required\",\n})","fix":"experimental_telemetry: {\n  isEnabled: true,\n  functionId: 'checkoutagent_toolloopagent',\n  metadata: { agent: 'checkoutAgent' },\n},","fixSnippet":"experimental_telemetry: {\n  isEnabled: true,\n  functionId: 'checkoutagent_toolloopagent',\n  metadata: { agent: 'checkoutAgent' },\n},","targetId":"chain:lib/checkout-agent.ts:16:ToolLoopAgent","agentId":"code:checkoutagent"},{"id":"risk:lib/checkout-agent.ts:16:missing-eval:8","kind":"missing-eval","severity":"medium","file":"lib/checkout-agent.ts","line":16,"message":"ToolLoopAgent chain lacks nearby eval or test evidence.","evidence":"new ToolLoopAgent({ model: openai(\"gpt-4.1-mini\"), instructions: \"You are a checkout assistant.\", tools: { chargeCard, done }, stopWhen: stepCountIs(5), toolChoice: \"required\", })","evidenceFull":"new ToolLoopAgent({\n  model: openai(\"gpt-4.1-mini\"),\n  instructions: \"You are a checkout assistant.\",\n  tools: { chargeCard, done },\n  stopWhen: stepCountIs(5),\n  toolChoice: \"required\",\n})","fix":"// vitest or promptfoo near this chain\ndescribe('checkoutAgent', () => {\n  it('handles expected tool flow', async () => {\n    const result = await ToolLoopAgent({ /* ... */ });\n    expect(result.text).toBeTruthy();\n  });\n});","fixSnippet":"// vitest or promptfoo near this chain\ndescribe('checkoutAgent', () => {\n  it('handles expected tool flow', async () => {\n    const result = await ToolLoopAgent({ /* ... */ });\n    expect(result.text).toBeTruthy();\n  });\n});","targetId":"chain:lib/checkout-agent.ts:16:ToolLoopAgent","agentId":"code:checkoutagent"},{"id":"risk:lib/unbounded-agent.ts:7:inline-prompt:9","kind":"inline-prompt","severity":"medium","file":"lib/unbounded-agent.ts","line":7,"message":"Prompt is inline and harder to audit, diff, reuse, or cover with evals.","evidence":"Research this topic thoroughly","evidenceFull":"Research this topic thoroughly","fix":"// prompts/unbounded_agent.ts\nexport const unbounded_agentSystem = `...`;\n\n// In your streamText call:\nsystem: unbounded_agentSystem,","fixSnippet":"// prompts/unbounded_agent.ts\nexport const unbounded_agentSystem = `...`;\n\n// In your streamText call:\nsystem: unbounded_agentSystem,","targetId":"prompt:lib/unbounded-agent.ts:7:prompt:3","agentId":"file:unbounded-agent"},{"id":"risk:lib/unbounded-agent.ts:5:unbounded-loop:10","kind":"unbounded-loop","severity":"high","file":"lib/unbounded-agent.ts","line":5,"message":"generateText uses isLoopFinished() without stepCountIs or hasToolCall bounds — unbounded loop / cost risk.","evidence":"isLoopFinished()","evidenceFull":"isLoopFinished()","fix":"stopWhen: stepCountIs(10), // tighten for production; AI SDK default is stepCountIs(20)","fixSnippet":"stopWhen: stepCountIs(10), // tighten for production; AI SDK default is stepCountIs(20)","targetId":"chain:lib/unbounded-agent.ts:5:generatetext","agentId":"file:unbounded-agent"},{"id":"risk:lib/unbounded-agent.ts:5:missing-trace:11","kind":"missing-trace","severity":"high","file":"lib/unbounded-agent.ts","line":5,"message":"generateText chain lacks trace ID, structured logging, or AI telemetry evidence.","evidence":"generateText({ model: openai(\"gpt-4.1-mini\"), prompt: \"Research this topic thoroughly\", stopWhen: isLoopFinished(), })","evidenceFull":"generateText({\n    model: openai(\"gpt-4.1-mini\"),\n    prompt: \"Research this topic thoroughly\",\n    stopWhen: isLoopFinished(),\n  })","fix":"experimental_telemetry: {\n  isEnabled: true,\n  functionId: 'unbounded_agent_generatetext',\n  metadata: { agent: 'Unbounded Agent' },\n},","fixSnippet":"experimental_telemetry: {\n  isEnabled: true,\n  functionId: 'unbounded_agent_generatetext',\n  metadata: { agent: 'Unbounded Agent' },\n},","targetId":"chain:lib/unbounded-agent.ts:5:generatetext","agentId":"file:unbounded-agent"},{"id":"risk:lib/unbounded-agent.ts:5:missing-eval:12","kind":"missing-eval","severity":"medium","file":"lib/unbounded-agent.ts","line":5,"message":"generateText chain lacks nearby eval or test evidence.","evidence":"generateText({ model: openai(\"gpt-4.1-mini\"), prompt: \"Research this topic thoroughly\", stopWhen: isLoopFinished(), })","evidenceFull":"generateText({\n    model: openai(\"gpt-4.1-mini\"),\n    prompt: \"Research this topic thoroughly\",\n    stopWhen: isLoopFinished(),\n  })","fix":"// vitest or promptfoo near this chain\ndescribe('Unbounded Agent', () => {\n  it('handles expected tool flow', async () => {\n    const result = await generateText({ /* ... */ });\n    expect(result.text).toBeTruthy();\n  });\n});","fixSnippet":"// vitest or promptfoo near this chain\ndescribe('Unbounded Agent', () => {\n  it('handles expected tool flow', async () => {\n    const result = await generateText({ /* ... */ });\n    expect(result.text).toBeTruthy();\n  });\n});","targetId":"chain:lib/unbounded-agent.ts:5:generatetext","agentId":"file:unbounded-agent"},{"id":"risk:app/api/chat/route.ts:19:scattered-models:13","kind":"scattered-models","severity":"medium","file":"app/api/chat/route.ts","line":19,"message":"Model openai(\"gpt-4.1-mini\") is hardcoded in 3 files. Centralize model selection for easier upgrades.","evidence":"openai(\"gpt-4.1-mini\")","evidenceFull":"openai(\"gpt-4.1-mini\")","fix":"// Centralize model selection\n// lib/models.ts\nexport const agentModels = {\n  route_chat: openai('gpt-4.1-mini'),\n};","fixSnippet":"// Centralize model selection\n// lib/models.ts\nexport const agentModels = {\n  route_chat: openai('gpt-4.1-mini'),\n};","targetId":"","agentId":""}],"modelCatalog":[{"model":"openai(\"gpt-4.1-mini\")","usages":3,"files":[{"file":"app/api/chat/route.ts","line":19,"chainType":"streamText"},{"file":"lib/checkout-agent.ts","line":16,"chainType":"ToolLoopAgent"},{"file":"lib/unbounded-agent.ts","line":5,"chainType":"generateText"}],"fileCount":3,"agents":["route:chat","code:checkoutagent","file:unbounded-agent"],"chainTypes":["streamText","ToolLoopAgent","generateText"]}],"mcpClients":[],"experimentalAgents":[],"markdownReport":"# Agent Observe Report\n\nGenerated 2026-06-18T03:29:46.948Z from `/Users/scottschindler/Documents/agent-observe/agent-observe-skill/fixtures/sample-agent`.\n\n## Summary\n\n- Agent selection: All detected agents\n- Agent candidates detected: 3\n- Prompts detected: 3\n- Tools detected: 4\n- Chains/model calls detected: 3\n- API routes detected: 1\n- UI entrypoints detected: 1\n- Risks detected: 13\n\n## Agent Candidates\n\n- Chat (route:chat) files: app/api/chat/route.ts, components/chat.tsx. Static scan inference: Chat is detected from route POST /api/chat. It exposes POST /api/chat, has 1 client entry point, runs 1 model call (openai(\"gpt-4.1-mini\")), defines 2 tools (searchOrders, refundUser), uses 1 prompt.\n- checkoutAgent (code:checkoutagent) files: lib/checkout-agent.ts. Static scan inference: checkoutAgent is detected from file lib/checkout-agent.ts. It runs 1 model call (openai(\"gpt-4.1-mini\")), defines 2 tools (chargeCard, done), uses 1 prompt.\n- Unbounded Agent (file:unbounded-agent) files: lib/unbounded-agent.ts. Static scan inference: Unbounded Agent is detected from file lib/unbounded-agent.ts. It runs 1 model call (openai(\"gpt-4.1-mini\")), uses 1 prompt.\n\n## Where are prompts defined?\n\n- `app/api/chat/route.ts:21` system (inline literal): You are a support agent. User said: ${body.message}\n- `lib/checkout-agent.ts:18` instructions (inline literal): You are a checkout assistant.\n- `lib/unbounded-agent.ts:7` prompt (inline literal): Research this topic thoroughly\n\n## Which model calls use which prompts?\n\n- `app/api/chat/route.ts:19` streamText uses system: You are a support agent. User said: ${body.message}.\n- `lib/checkout-agent.ts:16` ToolLoopAgent uses instructions: You are a checkout assistant..\n- `lib/unbounded-agent.ts:5` generateText uses prompt: Research this topic thoroughly.\n\n## Which tools can each chain call?\n\n- `app/api/chat/route.ts:19` streamText: searchOrders, refundUser.\n- `lib/checkout-agent.ts:16` ToolLoopAgent: chargeCard, done.\n- `lib/unbounded-agent.ts:5` generateText: no direct tools object detected.\n\n## What schemas do tools expose?\n\n- `searchOrders` at `app/api/chat/route.ts:5`: orderId.\n- `refundUser` at `app/api/chat/route.ts:11`: orderId.\n- `chargeCard` at `lib/checkout-agent.ts:5`: amount.\n- `done` at `lib/checkout-agent.ts:11`: summary.\n\n## Which tools have side effects?\n\n- `refundUser` at `app/api/chat/route.ts:11`.\n- `chargeCard` at `lib/checkout-agent.ts:5`.\n\n## Which routes expose AI behavior?\n\n- `app/api/chat/route.ts`: streamText.\n\n## Which chains lack evals?\n\n- `app/api/chat/route.ts:19` streamText.\n- `lib/checkout-agent.ts:16` ToolLoopAgent.\n- `lib/unbounded-agent.ts:5` generateText.\n\n## Which chains lack trace IDs or logging?\n\n- `lib/checkout-agent.ts:16` ToolLoopAgent.\n- `lib/unbounded-agent.ts:5` generateText.\n\n## Which prompts are inline and hard to audit?\n\n- `app/api/chat/route.ts:21` system: You are a support agent. User said: ${body.message}\n- `lib/checkout-agent.ts:18` instructions: You are a checkout assistant.\n- `lib/unbounded-agent.ts:7` prompt: Research this topic thoroughly\n\n"};
       // Embedded into renderSimpleHtmlReport — client-side only (no Node).
 const PHASE_META = {
   entry: { label: "Start", tone: "info" },
@@ -89,6 +98,8 @@ const state = {
   selectedId: "",
   kind: "",
   view: "report",
+  severityFilter: "all",
+  search: "",
 };
 
 const escapeHtml = (value) =>
@@ -101,7 +112,12 @@ const currentAgent = () => (trace.agents || []).find((agent) => agent.id === sta
 
 function promptTitle(item, fallback) {
   if (!item) return fallback || "Prompt";
-  const kind = item.kind === "system" ? "System instructions are added" : item.kind === "messages" ? "Conversation context is added" : "User instructions are added";
+  const kind =
+    item.kind === "system" || item.kind === "instructions"
+      ? "System instructions are added"
+      : item.kind === "messages"
+        ? "Conversation context is added"
+        : "User instructions are added";
   const name = String(item.name || "").trim();
   if (name && name.toLowerCase() !== String(item.kind || "").toLowerCase()) return kind + " · " + name;
   if (item.valueType === "reference") return kind + " from a shared reference";
@@ -116,27 +132,27 @@ function displayStepTitle(step) {
 
 function agentButtonClass(active) {
   return [
-    "rounded-lg border px-3 py-1.5 text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-gray-200 whitespace-nowrap",
+    "rounded-full border px-3 py-1.5 text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-[#0070f3]/30 whitespace-nowrap",
     active
-      ? "border-blue-600 text-blue-600 bg-blue-50"
-      : "border-gray-200 text-gray-700 bg-white hover:border-gray-300 hover:bg-gray-50",
+      ? "border-[#0070f3] text-[#3291ff] bg-[#0070f3]/10"
+      : "border-[#333] text-[#888] bg-[#0a0a0a] hover:border-[#555] hover:text-[#ededed]",
   ].join(" ");
 }
 
 function viewButtonClass(active) {
   return [
-    "rounded-md px-3 py-1.5 text-xs font-semibold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200",
-    active ? "bg-white text-blue-700 shadow-sm" : "text-gray-500 hover:text-gray-900",
+    "rounded-md px-3 py-1.5 text-xs font-semibold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0070f3]/30",
+    active ? "bg-[#ededed] text-black shadow-sm" : "text-[#888] hover:text-[#ededed]",
   ].join(" ");
 }
 
 function badge(text, tone) {
   const tones = {
-    high: "bg-red-50 text-red-700 border-red-200",
-    medium: "bg-amber-50 text-amber-800 border-amber-200",
-    low: "bg-gray-50 text-gray-600 border-gray-200",
-    info: "bg-blue-50 text-blue-700 border-blue-200",
-    ok: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    high: "bg-[#ff5555]/10 text-[#ff8888] border-[#ff5555]/30",
+    medium: "bg-[#f5a623]/10 text-[#f5c26b] border-[#f5a623]/30",
+    low: "bg-[#333]/50 text-[#888] border-[#444]",
+    info: "bg-[#0070f3]/10 text-[#3291ff] border-[#0070f3]/30",
+    ok: "bg-[#50e3c2]/10 text-[#50e3c2] border-[#50e3c2]/30",
   };
   return (
     '<span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ' +
@@ -174,11 +190,11 @@ function phaseAccent(phase) {
     entry: "bg-sky-500",
     route: "bg-indigo-500",
     prompt: "bg-violet-500",
-    model: "bg-blue-600",
+    model: "bg-[#0070f3]",
     tool: "bg-emerald-500",
     "side-effect": "bg-rose-500",
     output: "bg-gray-800",
-    empty: "bg-gray-300",
+    empty: "bg-[#444]",
   };
   return map[phase] || "bg-gray-400";
 }
@@ -186,9 +202,9 @@ function phaseAccent(phase) {
 function flowCardClass(active, nested) {
   return [
     "flow-card w-full text-left rounded-lg border transition-all",
-    "focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200 focus-visible:ring-offset-1",
-    nested ? "border-gray-200/90 bg-gray-50/80" : "border-gray-200 bg-white shadow-sm",
-    active ? "!border-blue-500 ring-2 ring-blue-100" : "hover:border-gray-300 hover:shadow",
+    "focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0070f3]/30 focus-visible:ring-offset-1 focus-visible:ring-offset-black",
+    nested ? "border-[#2a2a2a] bg-[#111]" : "border-[#333] bg-[#0a0a0a]",
+    active ? "!border-[#0070f3] ring-2 ring-[#0070f3]/20" : "hover:border-[#555]",
   ].join(" ");
 }
 
@@ -196,13 +212,13 @@ function flowStepMarker(step, active) {
   if (step.nested) {
     return (
       '<div class="mt-3 flex h-2 w-2 shrink-0 rounded-full ' +
-      (active ? "bg-blue-600" : "bg-gray-300") +
+      (active ? "bg-[#0070f3]" : "bg-[#444]") +
       '" aria-hidden="true"></div>'
     );
   }
   return (
     '<div class="mt-2.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold tabular-nums ' +
-    (active ? "bg-blue-600 text-white shadow-sm" : "border border-gray-300 bg-white text-gray-600") +
+    (active ? "bg-[#0070f3] text-white shadow-sm" : "border border-[#444] bg-[#0a0a0a] text-[#888]") +
     '">' +
     escapeHtml(String(step.order)) +
     "</div>"
@@ -211,20 +227,20 @@ function flowStepMarker(step, active) {
 
 function section(title, body) {
   return (
-    '<div class="grid gap-2"><h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500">' +
+    '<div class="grid gap-2"><h3 class="text-xs font-semibold uppercase tracking-wide text-[#888]">' +
     escapeHtml(title) +
-    '</h3><div class="text-[15px] text-gray-800">' +
+    '</h3><div class="text-[15px] text-[#ededed]">' +
     body +
     "</div></div>"
   );
 }
 
 function paragraph(text, tone) {
-  return '<p class="leading-relaxed ' + (tone || "text-gray-800") + '">' + escapeHtml(text) + "</p>";
+  return '<p class="leading-relaxed ' + (tone || "text-[#ededed]") + '">' + escapeHtml(text) + "</p>";
 }
 
 function codeValue(value) {
-  return '<code class="font-mono text-sm text-gray-700 break-words">' + escapeHtml(value || "—") + "</code>";
+  return '<code class="font-mono text-sm text-[#a1a1a1] break-words">' + escapeHtml(value || "—") + "</code>";
 }
 
 function detailList(items) {
@@ -234,10 +250,10 @@ function detailList(items) {
       .map(function (item) {
         return (
           '<div class="grid gap-1 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-3">' +
-          '<dt class="text-xs font-semibold uppercase tracking-wide text-gray-400">' +
+          '<dt class="text-xs font-semibold uppercase tracking-wide text-[#666]">' +
           escapeHtml(item[0]) +
           "</dt>" +
-          '<dd class="min-w-0 text-gray-800">' +
+          '<dd class="min-w-0 text-[#ededed]">' +
           item[1] +
           "</dd>" +
           "</div>"
@@ -248,41 +264,232 @@ function detailList(items) {
   );
 }
 
-function preBlock(text) {
+function preBlock(text, roomy) {
+  const sizeClass = roomy
+    ? "max-h-[min(58vh,640px)] p-4 text-[13px] leading-relaxed"
+    : "max-h-72 p-3 text-xs";
   return (
-    '<pre class="mt-2 max-h-64 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-gray-800 whitespace-pre-wrap break-words">' +
+    '<pre class="mt-2 overflow-auto rounded-lg border border-[#333] bg-[#080808] font-mono text-[#ededed] whitespace-pre-wrap break-words ' +
+    sizeClass +
+    '">' +
     escapeHtml(text || "") +
     "</pre>"
   );
 }
 
-function editorHref(item) {
+function itemLocation(item) {
+  if (!item || !item.file) return "Unknown location";
+  return item.file + (item.line ? ":" + item.line : "");
+}
+
+function promptText(item) {
+  return item?.text || item?.preview || "No prompt text resolved";
+}
+
+function promptKindLabel(item) {
+  if (!item) return "prompt";
+  if (item.kind === "system") return "system prompt";
+  if (item.kind === "instructions") return "instructions";
+  if (item.kind === "messages") return "messages";
+  return item.kind || "prompt";
+}
+
+function promptsForChain(chain) {
+  const linked = (chain?.promptIds || [])
+    .map((promptId) => (trace.prompts || []).find((prompt) => prompt.id === promptId))
+    .filter(Boolean);
+  if (linked.length) return linked;
+  return (chain?.prompts || []).map(function (value, index) {
+    return {
+      id: chain.id + ":prompt-fallback-" + index,
+      kind: value.split(":")[0] || "prompt",
+      valueType: "call argument",
+      file: chain.file,
+      line: chain.line,
+      preview: value,
+      text: value,
+    };
+  });
+}
+
+function toolsForChain(chain) {
+  const linked = (chain?.toolIds || [])
+    .map((toolId) => (trace.tools || []).find((tool) => tool.id === toolId))
+    .filter(Boolean);
+  if (linked.length) return linked;
+  return (chain?.tools || []).map(function (name, index) {
+    return {
+      id: chain.id + ":tool-fallback-" + index,
+      name,
+      description: "Referenced by this model call",
+      schema: "No schema resolved",
+      file: chain.file,
+      line: chain.line,
+      sideEffect: false,
+    };
+  });
+}
+
+function chainsForPrompt(prompt) {
+  return (trace.chains || []).filter(function (chain) {
+    if ((chain.promptIds || []).includes(prompt.id)) return true;
+    const text = promptText(prompt);
+    return (chain.prompts || []).some(function (value) {
+      return String(value || "").includes(text) || text.includes(String(value || ""));
+    });
+  });
+}
+
+function chainsForTool(tool) {
+  return (trace.chains || []).filter(function (chain) {
+    return (chain.toolIds || []).includes(tool.id) || (chain.tools || []).includes(tool.name);
+  });
+}
+
+function relationCards(items, empty) {
+  if (!items.length) return '<p class="text-sm text-[#888]">' + escapeHtml(empty) + "</p>";
+  return (
+    '<div class="grid gap-3">' +
+    items
+      .map(function (item) {
+        return (
+          '<div class="rounded-lg border border-[#2a2a2a] bg-[#111] p-3">' +
+          '<div class="flex flex-wrap items-center gap-2">' +
+          (item.badge ? badge(item.badge, item.tone || "info") : "") +
+          '<h4 class="text-sm font-semibold text-[#ededed]">' +
+          escapeHtml(item.title) +
+          "</h4></div>" +
+          (item.meta ? '<p class="mt-1 font-mono text-xs text-[#888] break-all">' + escapeHtml(item.meta) + "</p>" : "") +
+          (item.body ? '<div class="mt-2 text-sm leading-relaxed text-[#a1a1a1]">' + item.body + "</div>" : "") +
+          "</div>"
+        );
+      })
+      .join("") +
+    "</div>"
+  );
+}
+
+function chainRelationCard(chain) {
+  return {
+    badge: chain.type || "model",
+    tone: "info",
+    title: "Feeds " + (chain.type || "model call"),
+    meta: itemLocation(chain),
+    body:
+      detailList([
+        ["Model", codeValue(chain.modelFull || chain.model)],
+        ["Tools", escapeHtml((chain.tools || []).join(", ") || "none")],
+      ]),
+  };
+}
+
+function promptRelationCard(prompt) {
+  return {
+    badge: promptKindLabel(prompt),
+    tone: "low",
+    title: promptTitle(prompt, "Prompt"),
+    meta: itemLocation(prompt),
+    body: preBlock(promptText(prompt), true),
+  };
+}
+
+function toolRelationCard(tool) {
+  return {
+    badge: tool.sideEffect ? "action" : "lookup",
+    tone: tool.sideEffect ? "high" : "ok",
+    title: tool.name || "Tool",
+    meta: itemLocation(tool),
+    body:
+      '<p class="text-sm text-[#a1a1a1]">' +
+      escapeHtml(tool.descriptionFull || tool.description || "No description detected") +
+      "</p>" +
+      detailList([
+        ["Input", codeValue(tool.schema || "No schema resolved")],
+        ["State change", codeValue(tool.sideEffect ? "yes" : "no")],
+      ]),
+  };
+}
+
+function searchTextForStep(step) {
+  const item = findItem(step.kind, step.id);
+  if (!item) return [step.title, step.subtitle, step.note].join(" ");
+  if (step.kind === "prompts") return [step.title, step.subtitle, step.note, promptText(item)].join(" ");
+  if (step.kind === "chains") {
+    return [
+      step.title,
+      step.subtitle,
+      step.note,
+      item.model,
+      item.modelFull,
+      (item.prompts || []).join(" "),
+      promptsForChain(item).map(promptText).join(" "),
+      (item.tools || []).join(" "),
+    ].join(" ");
+  }
+  if (step.kind === "tools") {
+    return [step.title, step.subtitle, step.note, item.name, item.descriptionFull, item.description, item.schema, item.evidence].join(" ");
+  }
+  return [step.title, step.subtitle, step.note].join(" ");
+}
+
+function editorHref(item, scheme) {
   const root = (trace.root || "").replace(/\\/g, "/");
   const file = (item.file || "").replace(/\\/g, "/");
-  return "vscode://file/" + root + "/" + file + ":" + item.line;
+  return scheme + "://file/" + root + "/" + file + ":" + item.line;
 }
 
 function locBar(item) {
   const loc = item.file + ":" + item.line;
   return (
     '<div class="flex flex-wrap items-center gap-2 text-sm">' +
-    '<code class="font-mono text-xs text-gray-600">' +
+    '<code class="font-mono text-xs text-[#888]">' +
     escapeHtml(loc) +
     "</code>" +
-    '<a class="text-xs font-medium text-blue-600 hover:underline" href="' +
-    escapeHtml(editorHref(item)) +
-    '">Open in editor</a>' +
-    '<button type="button" class="copy-path text-xs font-medium text-gray-500 hover:text-gray-900" data-copy="' +
+    '<a class="text-xs font-medium text-[#3291ff] hover:underline" href="' +
+    escapeHtml(editorHref(item, "cursor")) +
+    '">Open in Cursor</a>' +
+    '<a class="text-xs font-medium text-[#3291ff] hover:underline" href="' +
+    escapeHtml(editorHref(item, "vscode")) +
+    '">VS Code</a>' +
+    '<button type="button" class="copy-path text-xs font-medium text-[#888] hover:text-[#ededed]" data-copy="' +
     escapeHtml(loc) +
     '">Copy path</button>' +
     "</div>"
   );
 }
 
+function matchesSearch(text) {
+  const q = (state.search || "").trim().toLowerCase();
+  if (!q) return true;
+  return String(text || "").toLowerCase().includes(q);
+}
+
+function filterRisks(risks) {
+  return risks.filter(function (risk) {
+    if (state.severityFilter !== "all" && risk.severity !== state.severityFilter) return false;
+    return matchesSearch([risk.message, risk.kind, risk.file, risk.evidence].join(" "));
+  });
+}
+
+function buildMermaidForAgent(agentId) {
+  const steps = flowStepsForAgent(agentId).filter(function (s) {
+    return s.phase !== "empty";
+  });
+  if (!steps.length) return "";
+  const lines = ["flowchart TD"];
+  steps.forEach(function (step, index) {
+    const nodeId = "N" + index;
+    const label = (step.title || step.phase || "step").replace(/"/g, "'");
+    lines.push('  ' + nodeId + '["' + label + '"]');
+    if (index > 0) lines.push("  N" + (index - 1) + " --> " + nodeId);
+  });
+  return lines.join("\n");
+}
+
 function renderOutputDetail(step, chain) {
   return (
     '<div class="grid gap-4">' +
-    '<h2 class="text-lg font-semibold text-gray-900">' +
+    '<h2 class="text-lg font-semibold text-[#ededed]">' +
     escapeHtml(step.title) +
     "</h2>" +
     section("What this means", paragraph(step.note || "The product shows the AI response to the user.")) +
@@ -295,7 +502,7 @@ function renderOutputDetail(step, chain) {
           ]),
         ) +
         locBar(chain) +
-        '<p class="text-xs text-gray-400 mt-2">In the UI, streamed tokens appear in the chat component; non-stream responses render as a single message or JSON payload.</p>'
+        '<p class="text-xs text-[#666] mt-2">In the UI, streamed tokens appear in the chat component; non-stream responses render as a single message or JSON payload.</p>'
       : "") +
     "</div>"
   );
@@ -331,9 +538,9 @@ function renderDetail(item, kind, step) {
   }
   if (!item) {
     if (step && step.phase === "empty") {
-      return '<p class="text-[15px] text-gray-500">' + escapeHtml(step.subtitle) + "</p>";
+      return '<p class="text-[15px] text-[#888]">' + escapeHtml(step.subtitle) + "</p>";
     }
-    return '<p class="text-[15px] text-gray-500">Select a step in the flow to inspect it.</p>';
+    return '<p class="text-[15px] text-[#888]">Select a step in the flow to inspect it.</p>';
   }
 
   const badges = [];
@@ -347,9 +554,17 @@ function renderDetail(item, kind, step) {
 
   let body = "";
   if (kind === "prompts") {
+    const promptChains = chainsForPrompt(item);
     body =
       section("What this means", paragraph(productMeaning(kind, item, step))) +
-      section("Prompt text", preBlock(item.text || item.preview || "No prompt text resolved")) +
+      section("Full prompt text", preBlock(promptText(item), true)) +
+      section(
+        "This prompt feeds into",
+        relationCards(
+          promptChains.map(chainRelationCard),
+          "No model call was linked to this prompt. It may be assembled dynamically or passed through another helper.",
+        ),
+      ) +
       section(
         "Code details",
         detailList([
@@ -361,18 +576,26 @@ function renderDetail(item, kind, step) {
     const schemaRows = (item.schemaFields || [])
       .map(
         (f) =>
-          '<tr class="border-t border-gray-100"><td class="py-2 pr-4 font-mono text-xs">' +
+          '<tr class="border-t border-[#2a2a2a]"><td class="py-2 pr-4 font-mono text-xs">' +
           escapeHtml(f.name) +
-          '</td><td class="py-2 font-mono text-xs text-gray-600">' +
+          '</td><td class="py-2 font-mono text-xs text-[#888]">' +
           escapeHtml(f.type) +
           "</td></tr>",
       )
       .join("");
+    const callerChains = chainsForTool(item);
     body =
       section("What this means", paragraph(productMeaning(kind, item, step))) +
       (item.sideEffect
-        ? '<p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">This can change real product state. Review permissions, logging, and tests before trusting model-triggered calls.</p>'
+        ? '<p class="rounded-lg border border-[#ff5555]/30 bg-[#ff5555]/10 px-3 py-2 text-sm text-[#ff8888]">This can change real product state. Review permissions, logging, and tests before trusting model-triggered calls.</p>'
         : "") +
+      section(
+        "Model calls that can call this tool",
+        relationCards(
+          callerChains.map(chainRelationCard),
+          "No model call was linked to this tool. It may be passed dynamically or exported for another file.",
+        ),
+      ) +
       section(
         "Code details",
         detailList([
@@ -384,21 +607,49 @@ function renderDetail(item, kind, step) {
       section(
         "Input data this tool expects",
         schemaRows
-          ? '<table class="w-full text-left"><thead><tr><th class="pb-2 text-xs text-gray-500">Field</th><th class="pb-2 text-xs text-gray-500">Type</th></tr></thead><tbody>' +
+          ? '<table class="w-full text-left"><thead><tr><th class="pb-2 text-xs text-[#888]">Field</th><th class="pb-2 text-xs text-[#888]">Type</th></tr></thead><tbody>' +
             schemaRows +
             "</tbody></table>"
-          : '<p class="text-gray-500 text-sm">' + escapeHtml(item.schema || "No schema") + "</p>",
-      );
+          : '<p class="text-[#888] text-sm">' + escapeHtml(item.schema || "No schema") + "</p>",
+      ) +
+      section("Tool implementation", preBlock(item.evidence || item.snippet || "No tool implementation captured", true));
   } else if (kind === "chains") {
+    const loopRows = [];
+    if (item.loop) {
+      if (item.loop.hasStopWhen) loopRows.push(["Loop bound", codeValue(item.loop.stepCount ? "stepCountIs(" + item.loop.stepCount + ")" : item.loop.stopWhen || item.loop.maxSteps)]);
+      if (item.loop.toolChoice) loopRows.push(["toolChoice", codeValue(item.loop.toolChoice)]);
+      if (item.loop.prepareStep) loopRows.push(["prepareStep", codeValue("yes")]);
+    }
+    if (item.telemetry) {
+      loopRows.push(["Telemetry", codeValue(item.telemetry.isEnabled ? "experimental_telemetry on" : "not detected")]);
+      if (item.telemetry.hasFunctionId) loopRows.push(["functionId", codeValue("set")]);
+    }
+    const chainPrompts = promptsForChain(item);
+    const chainTools = toolsForChain(item);
     body =
       section("What this means", paragraph(productMeaning(kind, item, step))) +
       section(
         "Code details",
         detailList([
           ["Model", codeValue(item.modelFull || item.model)],
-          ["Prompt inputs", escapeHtml((item.prompts || []).join("; ") || "—")],
-          ["Tools available", escapeHtml((item.tools || []).join(", ") || "—")],
+          ["Prompt inputs", escapeHtml(chainPrompts.length ? chainPrompts.map((prompt) => promptKindLabel(prompt)).join(", ") : "—")],
+          ["Tools available", escapeHtml(chainTools.length ? chainTools.map((tool) => tool.name).join(", ") : "—")],
+          ...loopRows,
         ]),
+      ) +
+      section(
+        "Prompts read by this model call",
+        relationCards(
+          chainPrompts.map(promptRelationCard),
+          "No prompt text was linked to this model call.",
+        ),
+      ) +
+      section(
+        "Tools this model can call",
+        relationCards(
+          chainTools.map(toolRelationCard),
+          "No tools were linked to this model call.",
+        ),
       );
   } else if (kind === "routes") {
     body =
@@ -419,7 +670,7 @@ function renderDetail(item, kind, step) {
 
   return (
     '<div class="grid gap-4">' +
-    '<div class="flex flex-wrap items-start gap-2"><h2 class="text-lg font-semibold text-gray-900 flex-1">' +
+    '<div class="flex flex-wrap items-start gap-2"><h2 class="text-lg font-semibold text-[#ededed] flex-1">' +
     escapeHtml(step ? displayStepTitle(step) : kind === "prompts" ? promptTitle(item, "") : item.name || item.hook) +
     "</h2>" +
     (badges.length ? '<div class="flex flex-wrap gap-1">' + badges.join("") + "</div>" : "") +
@@ -438,7 +689,7 @@ function riskTone(severity) {
 
 function renderRiskTimeline(risks) {
   if (!risks.length) {
-    return '<p class="text-sm text-gray-500">No risks detected for this agent.</p>';
+    return '<p class="text-sm text-[#888]">No risks detected for this agent.</p>';
   }
   return (
     '<ol class="grid gap-3 list-none m-0 p-0">' +
@@ -453,19 +704,19 @@ function renderRiskTimeline(risks) {
           '">' +
           '<div class="flex gap-3 px-3.5 py-3">' +
           '<div class="w-1 shrink-0 rounded-full ' +
-          (risk.severity === "high" ? "bg-red-500" : risk.severity === "medium" ? "bg-amber-500" : "bg-gray-400") +
+          (risk.severity === "high" ? "bg-[#ff5555]" : risk.severity === "medium" ? "bg-[#f5a623]" : "bg-[#666]") +
           '" aria-hidden="true"></div>' +
           '<div class="min-w-0 flex-1">' +
           '<div class="flex flex-wrap items-center gap-2">' +
-          '<span class="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">Risk ' +
+          '<span class="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#666]">Risk ' +
           escapeHtml(String(index + 1)) +
           "</span>" +
           badge(risk.severity || "risk", riskTone(risk.severity)) +
           "</div>" +
-          '<div class="mt-1 text-[15px] font-medium leading-snug text-gray-900">' +
+          '<div class="mt-1 text-[15px] font-medium leading-snug text-[#ededed]">' +
           escapeHtml(risk.message || "Risk") +
           "</div>" +
-          '<div class="mt-1 font-mono text-[12px] leading-relaxed text-gray-500 break-all">' +
+          '<div class="mt-1 font-mono text-[12px] leading-relaxed text-[#888] break-all">' +
           escapeHtml((risk.kind || "risk") + " · " + risk.file + ":" + risk.line) +
           "</div>" +
           "</div></div></button></li>"
@@ -477,10 +728,10 @@ function renderRiskTimeline(risks) {
 }
 
 function renderRiskDetail(risk) {
-  if (!risk) return '<p class="text-[15px] text-gray-500">Select a risk to inspect it.</p>';
+  if (!risk) return '<p class="text-[15px] text-[#888]">Select a risk to inspect it.</p>';
   return (
     '<div class="grid gap-4">' +
-    '<div class="flex flex-wrap items-start gap-2"><h2 class="text-lg font-semibold text-gray-900 flex-1">' +
+    '<div class="flex flex-wrap items-start gap-2"><h2 class="text-lg font-semibold text-[#ededed] flex-1">' +
     escapeHtml(risk.message || "Risk") +
     "</h2>" +
     '<div class="flex flex-wrap gap-1">' +
@@ -489,15 +740,22 @@ function renderRiskDetail(risk) {
     "</div></div>" +
     locBar(risk) +
     section("Why this was flagged", preBlock(risk.evidenceFull || risk.evidence || "No evidence captured")) +
-    section("Recommended next step", '<p class="text-[15px] leading-relaxed text-gray-800">' + escapeHtml(risk.fix || "Review this risk in the referenced code path.") + "</p>") +
-    (risk.targetId ? section("Code target", '<code class="font-mono text-xs text-gray-600">' + escapeHtml(risk.targetId) + "</code>") : "") +
+    section(
+      "Recommended fix",
+      '<p class="text-[15px] leading-relaxed text-[#ededed] mb-2">Copy this snippet into the referenced call site:</p>' +
+        preBlock(risk.fixSnippet || risk.fix || "Review this risk in the referenced code path.") +
+        '<button type="button" class="copy-fix mt-2 rounded-lg border border-[#333] bg-[#111] px-3 py-1.5 text-xs font-semibold text-[#a1a1a1] hover:bg-[#1a1a1a]" data-copy="' +
+        escapeHtml(risk.fixSnippet || risk.fix || "") +
+        '">Copy fix snippet</button>',
+    ) +
+    (risk.targetId ? section("Code target", '<code class="font-mono text-xs text-[#888]">' + escapeHtml(risk.targetId) + "</code>") : "") +
     "</div>"
   );
 }
 
 function renderFlowTimeline(steps) {
   if (!steps.length) {
-    return '<p class="text-sm text-gray-500">No execution flow for this agent.</p>';
+    return '<p class="text-sm text-[#888]">No execution flow for this agent.</p>';
   }
   return (
     '<ol class="flow-track list-none m-0 p-0">' +
@@ -516,7 +774,7 @@ function renderFlowTimeline(steps) {
           railPad +
           '">' +
           flowStepMarker(step, active) +
-          (!isLast ? '<div class="flow-rail-line w-px flex-1 min-h-3 bg-gray-200 mt-1"></div>' : "") +
+          (!isLast ? '<div class="flow-rail-line w-px flex-1 min-h-3 bg-[#333] mt-1"></div>' : "") +
           "</div>" +
           '<div class="pb-3 min-w-0">' +
           '<button type="button" class="' +
@@ -531,13 +789,13 @@ function renderFlowTimeline(steps) {
           phaseAccent(step.phase) +
           '" aria-hidden="true"></div>' +
           '<div class="min-w-0 flex-1">' +
-          '<div class="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">' +
+          '<div class="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#666]">' +
           escapeHtml(meta.label) +
           "</div>" +
-          '<div class="mt-1 text-[15px] font-medium leading-snug text-gray-900">' +
+          '<div class="mt-1 text-[15px] font-medium leading-snug text-[#ededed]">' +
           escapeHtml(displayStepTitle(step)) +
           "</div>" +
-          '<div class="mt-1 font-mono text-[12px] leading-relaxed text-gray-500 break-all">' +
+          '<div class="mt-1 font-mono text-[12px] leading-relaxed text-[#888] break-all">' +
           escapeHtml(step.subtitle) +
           "</div>" +
           "</div>" +
@@ -567,10 +825,107 @@ async function copyText(value) {
   document.body.removeChild(ta);
 }
 
+function renderScanDiffBanner() {
+  const el = document.querySelector("#scan-diff-banner");
+  if (!el || !trace.scanDiff?.hasPrevious) {
+    if (el) el.textContent = "";
+    return;
+  }
+  const d = trace.scanDiff;
+  el.innerHTML =
+    '<span class="text-[#50e3c2] font-medium">' +
+    d.fixedCount +
+    " fixed</span> · <span class=\"text-[#f5c26b] font-medium\">" +
+    d.newCount +
+    " new</span> since " +
+    escapeHtml(d.previousAt || "last scan");
+}
+
+function renderMermaid() {
+  const container = document.querySelector("#mermaid-flow");
+  if (!container) return;
+  const def = buildMermaidForAgent(state.agentId);
+  if (!def || state.view === "risks") {
+    container.classList.add("hidden");
+    container.innerHTML = "";
+    return;
+  }
+  container.classList.remove("hidden");
+  container.innerHTML = '<pre class="mermaid text-sm">' + escapeHtml(def) + "</pre>";
+  if (window.mermaid) {
+    try {
+      window.mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" });
+      window.mermaid.run({ nodes: container.querySelectorAll(".mermaid") });
+    } catch (e) {
+      /* mermaid optional */
+    }
+  }
+}
+
+function renderRiskFilters() {
+  const el = document.querySelector("#risk-filters");
+  if (!el) return;
+  const risks = byAgent(trace.risks || []);
+  const counts = { all: risks.length, high: 0, medium: 0, low: 0 };
+  risks.forEach(function (r) {
+    if (counts[r.severity] !== undefined) counts[r.severity] += 1;
+  });
+  el.innerHTML = ["all", "high", "medium", "low"]
+    .map(function (sev) {
+      const active = state.severityFilter === sev;
+      return (
+        '<button type="button" class="rounded-md border px-2 py-1 text-[11px] font-semibold ' +
+        (active ? "border-[#0070f3] bg-[#0070f3]/10 text-[#3291ff]" : "border-[#333] text-[#888] hover:bg-[#111]") +
+        '" data-severity="' +
+        sev +
+        '">' +
+        escapeHtml(sev) +
+        " (" +
+        counts[sev] +
+        ")</button>"
+      );
+    })
+    .join("");
+  el.querySelectorAll("[data-severity]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      state.severityFilter = button.dataset.severity;
+      state.selectedId = "";
+      render();
+    });
+  });
+}
+
+function preferredInitialStep(steps) {
+  return steps.find((step) => step.phase === "prompt") || steps[0] || null;
+}
+
 function render() {
   const agent = currentAgent();
-  const steps = flowStepsForAgent(state.agentId);
-  const risks = byAgent(trace.risks || []);
+  const steps = flowStepsForAgent(state.agentId).filter(function (step) {
+    return matchesSearch(searchTextForStep(step));
+  });
+  const risks = filterRisks(byAgent(trace.risks || []));
+  renderScanDiffBanner();
+  renderRiskFilters();
+  const searchInput = document.querySelector("#report-search");
+  if (searchInput && searchInput !== document.activeElement) {
+    searchInput.value = state.search;
+  }
+  if (searchInput && !searchInput.dataset.bound) {
+    searchInput.dataset.bound = "1";
+    searchInput.addEventListener("input", function () {
+      state.search = searchInput.value;
+      render();
+    });
+  }
+  const copyCtxBtn = document.querySelector("#copy-agent-context");
+  if (copyCtxBtn && !copyCtxBtn.dataset.bound) {
+    copyCtxBtn.dataset.bound = "1";
+    copyCtxBtn.addEventListener("click", function () {
+      const md = (trace.agentContexts && trace.agentContexts[state.agentId]) || "";
+      copyText(md || "No agent context available.");
+    });
+  }
 
   document.querySelector("#agents").innerHTML =
     (trace.agents || [])
@@ -586,7 +941,7 @@ function render() {
         );
       })
       .join("") ||
-    '<span class="text-sm text-gray-500">No agents detected</span>';
+    '<span class="text-sm text-[#888]">No agents detected</span>';
 
   document.querySelectorAll("[data-agent]").forEach(function (button) {
     button.addEventListener("click", function () {
@@ -666,28 +1021,31 @@ function render() {
     document.querySelector("#detail-title").textContent = risk ? "Risk " + riskIndex + " · " + (risk.severity || "review") : "Risk details";
     const detailBox = document.querySelector("#detail-box");
     detailBox.className =
-      "min-h-[280px] rounded-xl bg-white p-5 shadow-sm " +
-      (risk ? "border-2 border-blue-500 ring-2 ring-blue-50" : "border border-gray-200");
+      "min-h-[480px] rounded-xl bg-[#0a0a0a] p-5 shadow-sm " +
+      (risk ? "border-2 border-[#0070f3] ring-2 ring-[#0070f3]/20" : "border border-[#333]");
     detailBox.innerHTML = renderRiskDetail(risk);
 
-    document.querySelectorAll(".copy-path").forEach(function (button) {
+    document.querySelectorAll(".copy-path, .copy-fix").forEach(function (button) {
       button.addEventListener("click", function () {
         copyText(button.dataset.copy);
       });
     });
+    renderMermaid();
     return;
   }
 
   if (!state.selectedId && steps[0]) {
-    state.selectedId = steps[0].id;
-    state.kind = steps[0].kind;
+    const initialStep = preferredInitialStep(steps);
+    state.selectedId = initialStep.id;
+    state.kind = initialStep.kind;
   }
   const currentStep = steps.find(function (s) {
     return s.id === state.selectedId;
   });
   if (state.selectedId && !currentStep && steps[0]) {
-    state.selectedId = steps[0].id;
-    state.kind = steps[0].kind;
+    const initialStep = preferredInitialStep(steps);
+    state.selectedId = initialStep.id;
+    state.kind = initialStep.kind;
   }
 
   document.querySelector("#flow-timeline").innerHTML = renderFlowTimeline(steps);
@@ -706,15 +1064,16 @@ function render() {
   document.querySelector("#detail-title").textContent = step ? "Step " + step.order + " · " + (PHASE_META[step.phase]?.label || "Details") : "Step details";
   const detailBox = document.querySelector("#detail-box");
   detailBox.className =
-    "min-h-[280px] rounded-xl bg-white p-5 shadow-sm " +
-    (step ? "border-2 border-blue-500 ring-2 ring-blue-50" : "border border-gray-200");
+    "min-h-[560px] rounded-xl bg-[#0a0a0a] p-5 shadow-sm " +
+    (step ? "border-2 border-[#0070f3] ring-2 ring-[#0070f3]/20" : "border border-[#333]");
   detailBox.innerHTML = renderDetail(item, state.kind, step);
 
-  document.querySelectorAll(".copy-path").forEach(function (button) {
+  document.querySelectorAll(".copy-path, .copy-fix").forEach(function (button) {
     button.addEventListener("click", function () {
       copyText(button.dataset.copy);
     });
   });
+  renderMermaid();
 }
 
 render();

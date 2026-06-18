@@ -77,10 +77,29 @@ The scanner creates a local output folder in the target repo:
 
 ```text
 .agent-observe-skill/
-└── agent-report.html
+├── agent-report.html
+├── agent-report.json
+├── agent-map.md
+└── agent-report.previous.json
 ```
 
-Open `agent-report.html` in your browser. It combines the report and risks in one local HTML file with a Report/Risks toggle, agent selection, inferred agent descriptions, and per-agent detail views for entry points, tool calls, prompts, model calls, routes, and risks. The scanner removes older generated Markdown and JSON artifacts from previous runs. Generated files are added to `.git/info/exclude` so they stay out of ordinary commits.
+Open `agent-report.html` in your browser. It includes agent selection, flow timeline, full prompt text, prompt-to-model links, model-to-tool links, mermaid diagram, severity filters, search, copy-paste fix snippets, and per-agent context export. Use `agent-report.json` for CI and tooling. Use `agent-map.md` as paste-ready context for Cursor, Codex, or Claude. Generated files are added to `.git/info/exclude` so they stay out of ordinary commits.
+
+## CI Guardrail
+
+Fail the build when high-severity risks exceed a threshold:
+
+```bash
+bash agent-observe-skill/scripts/skill.sh . --ci --max-high 0
+```
+
+GitHub Actions example:
+
+```yaml
+- name: Agent Observe scan
+  run: |
+    bash agent-observe-skill/scripts/skill.sh . --ci --max-high 0
+```
 
 ## What Gets Installed
 
@@ -88,43 +107,47 @@ The installed skill is limited to `SKILL.md`, `agents/openai.yaml`, `scripts/ski
 
 ## What It Detects
 
-The scanner prioritizes Vercel AI SDK, OpenAI SDK, and agent patterns:
+The scanner prioritizes Vercel AI SDK 5/6, OpenAI SDK, and agent patterns:
 
-- `streamText(...)`
-- `generateText(...)`
-- `streamObject(...)`
-- `generateObject(...)`
-- `openai.chat.completions.create(...)`
-- `openai.responses.create(...)`
-- `tool(...)`
-- `ToolLoopAgent`
-- `system`, `prompt`, and `messages`
-- `inputSchema`
-- `execute`
+- `streamText(...)`, `generateText(...)`, `streamObject(...)`, `generateObject(...)`
+- `new ToolLoopAgent(...)`, `Experimental_Agent`, `dynamicTool(...)`
+- `openai.chat.completions.create(...)`, `openai.responses.create(...)`
+- `tool(...)` with `inputSchema`, `execute`, `needsApproval`
+- Loop control: `stopWhen`, `stepCountIs`, `maxSteps`, `prepareStep`, `toolChoice`
+- Telemetry: `experimental_telemetry`, `functionId`, `recordInputs`, `recordOutputs`
+- MCP clients, structured output, message persistence helpers
+- `system`, `prompt`, `messages`, and `instructions`
 - API routes under `app/api/**` and `pages/api/**`
 - Client chat hooks like `useChat(...)`, `useCompletion(...)`, and `useAssistant(...)`
+- `package.json` `ai` dependency version
 
-It also flags common observability risks:
+It also flags AI SDK-specific risks with copy-paste fix snippets:
 
-- Inline prompts that are hard to audit
-- Side-effecting tools
-- Chains without nearby eval evidence
-- Chains without trace IDs, logging, or telemetry evidence
-- AI routes without trace coverage
+- Unbounded agent loops and `toolChoice: 'required'` without a `done` tool
+- Side-effecting tools without `needsApproval`
+- Per-call missing telemetry or `functionId`
+- Telemetry recording user PII in prompts
+- Scattered hardcoded models across files
+- Inline prompts, missing evals, missing trace coverage
 
 ## Report Questions
 
 The generated report answers:
 
 - Where are prompts defined?
-- Which model calls use which prompts?
+- What is the full text of each prompt?
+- Which model calls use which prompts and models?
 - Which tools can each chain call?
+- Which model calls can invoke each tool?
 - What schemas do tools expose?
-- Which tools have side effects?
+- Which tools have side effects or lack approval gates?
+- Which agent loops have bounds?
+- Is telemetry configured per call?
 - Which routes expose AI behavior?
 - Which chains lack evals?
 - Which chains lack trace IDs or logging?
 - Which prompts are inline and hard to audit?
+- What changed since the last scan?
 
 ## How It Works
 
@@ -144,13 +167,19 @@ The static product demo is available at:
 demo/
 ```
 
-Its source is `demo/index.html`. It includes:
+Its source is `demo/index.html`, baked from a scan of `agent-observe-skill/fixtures/sample-agent`. It includes:
 
-- A download button for `skill.sh`
-- Overall counts
-- Agent selection
-- A Report/Risks toggle
-- Per-agent detail views for entry points, tool calls, prompts, model calls, routes, and risks
-- A focused detail panel
+- 4 sample agents (chat, checkout, unbounded loop)
+- AI SDK version header (`ai@6.0.0`)
+- Flow timeline, mermaid diagram, severity filters, and search
+- Copy-paste fix snippets and per-agent context export
+- Report/Risks toggle with 12 sample risks
 
-To preview it locally, serve the repo with any static file server and open `demo/`.
+To preview locally, serve the repo with any static file server and open `demo/`.
+
+To refresh the demo after fixture changes, scan the fixture then rebake:
+
+```bash
+bash agent-observe-skill/scripts/skill.sh agent-observe-skill/fixtures/sample-agent
+node agent-observe-skill/scripts/bake-demo.js
+```

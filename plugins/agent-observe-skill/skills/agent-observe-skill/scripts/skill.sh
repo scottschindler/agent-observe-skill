@@ -4,6 +4,9 @@ set -u
 ROOT=""
 AGENT_FILTER="${AGENT_OBSERVE_AGENT:-}"
 LIST_AGENTS=0
+CI_MODE="${AGENT_OBSERVE_CI:-0}"
+OUTPUT_FORMAT="${AGENT_OBSERVE_FORMAT:-html}"
+MAX_HIGH="${AGENT_OBSERVE_MAX_HIGH:-999}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -19,13 +22,37 @@ while [ "$#" -gt 0 ]; do
       LIST_AGENTS=1
       shift
       ;;
+    --ci)
+      CI_MODE=1
+      OUTPUT_FORMAT="json"
+      shift
+      ;;
+    --format)
+      OUTPUT_FORMAT="${2:-html}"
+      shift 2
+      ;;
+    --format=*)
+      OUTPUT_FORMAT="${1#--format=}"
+      shift
+      ;;
+    --max-high)
+      MAX_HIGH="${2:-0}"
+      shift 2
+      ;;
+    --max-high=*)
+      MAX_HIGH="${1#--max-high=}"
+      shift
+      ;;
     --help|-h)
       cat <<'HELP'
-Usage: bash skill.sh [repo-path] [--agent <agent-name-or-id[,agent-name-or-id...]>] [--list-agents]
+Usage: bash skill.sh [repo-path] [--agent <agent-name-or-id[,agent-name-or-id...]>] [--list-agents] [--ci] [--format html|json] [--max-high N]
 
 Options:
   --agent <value>   Scan one or more detected agents. Accepts shown ids, names, comma-separated values, or "all".
   --list-agents     Print detected agents and exit without writing reports.
+  --ci              CI mode: write JSON, print summary, exit non-zero if high risks exceed --max-high.
+  --format <value>  Output format: html (default) or json.
+  --max-high <n>    Max allowed high-severity risks before CI exit 1 (default: 999; use 0 in CI).
   --help            Show this help.
 HELP
       exit 0
@@ -80,7 +107,7 @@ if [ -t 0 ] && [ -t 1 ]; then
 fi
 
 if command -v node >/dev/null 2>&1; then
-  SKILL_SELF="$SELF_PATH" AGENT_OBSERVE_AGENT="$AGENT_FILTER" AGENT_OBSERVE_LIST="$LIST_AGENTS" AGENT_OBSERVE_INTERACTIVE="$INTERACTIVE" node - "$ROOT" "$OUT_DIR" <<'NODE'
+  SKILL_SELF="$SELF_PATH" AGENT_OBSERVE_AGENT="$AGENT_FILTER" AGENT_OBSERVE_LIST="$LIST_AGENTS" AGENT_OBSERVE_INTERACTIVE="$INTERACTIVE" AGENT_OBSERVE_CI="$CI_MODE" AGENT_OBSERVE_FORMAT="$OUTPUT_FORMAT" AGENT_OBSERVE_MAX_HIGH="$MAX_HIGH" node - "$ROOT" "$OUT_DIR" <<'NODE'
 const fs = require("fs");
 const path = require("path");
 const childProcess = require("child_process");
@@ -91,6 +118,9 @@ const selfPath = path.resolve(process.env.SKILL_SELF || "");
 const requestedAgent = clean(process.env.AGENT_OBSERVE_AGENT || "");
 const listAgentsOnly = process.env.AGENT_OBSERVE_LIST === "1";
 const interactive = process.env.AGENT_OBSERVE_INTERACTIVE === "1";
+const ciMode = process.env.AGENT_OBSERVE_CI === "1";
+const outputFormat = clean(process.env.AGENT_OBSERVE_FORMAT || "html") || "html";
+const maxHighRisks = Number(process.env.AGENT_OBSERVE_MAX_HIGH ?? 999);
 
 const ignoreDirs = new Set([
   ".git",
@@ -129,6 +159,11 @@ const records = {
   uiEntrypoints: [],
   modelCalls: [],
   risks: [],
+  modelCatalog: [],
+  mcpClients: [],
+  experimentalAgents: [],
+  aiSdk: null,
+  scanDiff: null,
 };
 
 function rel(file) {
@@ -216,15 +251,258 @@ function schemaFields(snippet) {
   return fields.slice(0, 24);
 }
 
-function riskFixHint(kind) {
-  const hints = {
-    "inline-prompt": "Extract the prompt to a named constant or dedicated file, then add eval coverage.",
-    "side-effect-tool": "Add trace IDs, authorization checks, and integration tests for this tool's execute handler.",
-    "missing-eval": "Add promptfoo, vitest, or runtime evals near this chain.",
-    "missing-trace": "Add traceId, structured logging, or AI SDK experimental_telemetry.",
-    "route-without-trace": "Instrument this API route with trace metadata before model calls return.",
+function safeFunctionId(value) {
+  return slug(value || "agent").replace(/-/g, "_");
+}
+
+function buildFixSnippet(kind, ctx = {}) {
+  const agentName = ctx.agentName || ctx.agentId || "agent";
+  const functionId = ctx.functionId || `${safeFunctionId(agentName)}_chain`;
+  const toolName = ctx.toolName || "myTool";
+  const chainType = ctx.chainType || "streamText";
+  const snippets = {
+    "inline-prompt": `// prompts/${safeFunctionId(agentName)}.ts\nexport const ${safeFunctionId(agentName)}System = \`...\`;\n\n// In your ${chainType} call:\nsystem: ${safeFunctionId(agentName)}System,`,
+    "side-effect-tool": `// Add approval gate for side-effecting tools (AI SDK 5+)\n${toolName}: tool({\n  description: '...',\n  inputSchema: z.object({ ... }),\n  needsApproval: true,\n  execute: async (input) => { /* ... */ },\n}),`,
+    "side-effect-without-approval": `needsApproval: true, // require human approval before ${toolName} runs`,
+    "missing-eval": `// vitest or promptfoo near this chain\ndescribe('${agentName}', () => {\n  it('handles expected tool flow', async () => {\n    const result = await ${chainType}({ /* ... */ });\n    expect(result.text).toBeTruthy();\n  });\n});`,
+    "missing-trace": `experimental_telemetry: {\n  isEnabled: true,\n  functionId: '${functionId}',\n  metadata: { agent: '${agentName}' },\n},`,
+    "telemetry-without-function-id": `experimental_telemetry: {\n  isEnabled: true,\n  functionId: '${functionId}', // groups traces in Sentry/Langfuse/SigNoz\n},`,
+    "telemetry-records-pii": `experimental_telemetry: {\n  isEnabled: true,\n  functionId: '${functionId}',\n  recordInputs: false,  // disable if prompts contain user PII\n  recordOutputs: false,\n},`,
+    "route-without-trace": `// At route entry, propagate trace context\nconst traceId = request.headers.get('x-trace-id') ?? crypto.randomUUID();\n// Pass traceId into ${chainType} experimental_telemetry.metadata`,
+    "unbounded-loop": `stopWhen: stepCountIs(10), // tighten for production; AI SDK default is stepCountIs(20)`,
+    "required-tool-without-done": `// Add a terminating done tool when using toolChoice: 'required'\ndone: tool({\n  description: 'Signal task completion',\n  inputSchema: z.object({ summary: z.string() }),\n  // no execute — model calls this to stop the loop\n}),`,
+    "scattered-models": `// Centralize model selection\n// lib/models.ts\nexport const agentModels = {\n  ${safeFunctionId(agentName)}: openai('gpt-4.1-mini'),\n};`,
   };
-  return hints[kind] || "Review this finding and add observability or tests.";
+  return snippets[kind] || "Review this finding and add observability, tests, or loop bounds.";
+}
+
+function readAiSdkVersion(scanRoot) {
+  const candidates = [
+    path.join(scanRoot, "package.json"),
+    path.join(scanRoot, "apps", "web", "package.json"),
+    path.join(scanRoot, "packages", "api", "package.json"),
+  ];
+  let version = "";
+  let source = "";
+  for (const pkgPath of candidates) {
+    if (!fs.existsSync(pkgPath)) continue;
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      const deps = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies };
+      if (deps.ai) {
+        version = String(deps.ai).replace(/^[\^~>=<]+/, "");
+        source = rel(pkgPath);
+        break;
+      }
+    } catch {
+      /* ignore malformed package.json */
+    }
+  }
+  const major = version ? Number(version.split(".")[0]) : null;
+  return {
+    version: version || "not detected",
+    major: Number.isFinite(major) ? major : null,
+    source,
+    usesStopWhen: major === null || major >= 5,
+    usesMaxSteps: major !== null && major < 5,
+    label: version ? `ai@${version}` : "ai package not found",
+  };
+}
+
+function parseLoopConfig(snippet) {
+  const stopWhen = extractProperty(snippet, "stopWhen") || "";
+  const maxSteps = extractProperty(snippet, "maxSteps") || "";
+  const prepareStep = extractProperty(snippet, "prepareStep") || "";
+  const onStepFinish = extractProperty(snippet, "onStepFinish") || "";
+  const toolChoice = extractProperty(snippet, "toolChoice") || "";
+  const activeTools = extractProperty(snippet, "activeTools") || "";
+  const hasStopWhen = !!stopWhen.trim();
+  const hasMaxSteps = !!maxSteps.trim();
+  const stepCountMatch = stopWhen.match(/stepCountIs\s*\(\s*(\d+)/) || maxSteps.match(/(\d+)/);
+  const stepCount = stepCountMatch ? stepCountMatch[1] : "";
+  const isUnbounded =
+    /\bisLoopFinished\s*\(\s*\)/.test(stopWhen) &&
+    !/stepCountIs|hasToolCall/.test(`${stopWhen} ${maxSteps}`);
+  const toolChoiceRequired = /['"]required['"]/.test(toolChoice) || toolChoice === "required";
+  return {
+    stopWhen: preview(stopWhen, 120),
+    maxSteps: preview(maxSteps, 80),
+    prepareStep: !!prepareStep.trim(),
+    onStepFinish: !!onStepFinish.trim(),
+    toolChoice: preview(toolChoice, 80),
+    activeTools: preview(activeTools, 120),
+    hasStopWhen: hasStopWhen || hasMaxSteps,
+    stepCount,
+    isUnbounded,
+    toolChoiceRequired,
+  };
+}
+
+function parseTelemetryConfig(snippet) {
+  const telemetryRaw = extractProperty(snippet, "experimental_telemetry") || "";
+  const hasTelemetry = /\bexperimental_telemetry\b/.test(snippet);
+  const isEnabled = /isEnabled\s*:\s*true/.test(telemetryRaw) || (hasTelemetry && !/isEnabled\s*:\s*false/.test(telemetryRaw));
+  const hasFunctionId = /functionId\s*:/.test(telemetryRaw);
+  const recordInputsOn = hasTelemetry && !/recordInputs\s*:\s*false/.test(telemetryRaw);
+  const recordOutputsOn = hasTelemetry && !/recordOutputs\s*:\s*false/.test(telemetryRaw);
+  return {
+    hasTelemetry,
+    isEnabled,
+    hasFunctionId,
+    recordInputsOn,
+    recordOutputsOn,
+    raw: preview(telemetryRaw, 200),
+  };
+}
+
+function hasUserInputInPrompt(snippet, promptBindings) {
+  const promptText = ["system", "prompt", "messages"]
+    .map((key) => extractProperty(snippet, key))
+    .filter(Boolean)
+    .join(" ");
+  if (/\$\{|\.content|user\.|input\.|message\.|req\.|body\./i.test(promptText)) return true;
+  for (const ref of promptReferences(promptText)) {
+    const resolved = resolvePromptText(ref, promptBindings);
+    if (/\$\{|user|input|message/i.test(resolved)) return true;
+  }
+  return /\$\{/.test(snippet);
+}
+
+const modelCatalogMap = new Map();
+
+function registerModelUsage(model, file, line, chainType, agentId) {
+  const modelKey = preview(model, 160);
+  if (!modelKey || modelKey === "No model property detected" || modelKey === "Agent loop") return;
+  const relative = rel(file);
+  if (!modelCatalogMap.has(modelKey)) {
+    modelCatalogMap.set(modelKey, {
+      model: modelKey,
+      usages: 0,
+      files: [],
+      agents: new Set(),
+      chainTypes: new Set(),
+    });
+  }
+  const entry = modelCatalogMap.get(modelKey);
+  entry.usages += 1;
+  entry.files.push({ file: relative, line, chainType });
+  entry.agents.add(agentId);
+  entry.chainTypes.add(chainType);
+}
+
+function finalizeModelCatalog() {
+  records.modelCatalog = [...modelCatalogMap.values()].map((entry) => ({
+    model: entry.model,
+    usages: entry.usages,
+    files: entry.files.slice(0, 24),
+    fileCount: new Set(entry.files.map((f) => f.file)).size,
+    agents: [...entry.agents],
+    chainTypes: [...entry.chainTypes],
+  }));
+  const scattered = records.modelCatalog.filter((entry) => entry.fileCount >= 3);
+  for (const entry of scattered) {
+    for (const usage of entry.files.slice(0, 1)) {
+      pushRisk(
+        "scattered-models",
+        "medium",
+        path.join(root, usage.file),
+        usage.line,
+        `Model ${entry.model} is hardcoded in ${entry.fileCount} files. Centralize model selection for easier upgrades.`,
+        entry.model,
+        "",
+        "",
+        { agentName: entry.agents[0] || "agent" },
+      );
+    }
+  }
+}
+
+function agentNameForId(agentId) {
+  const agent = agentMap.get(agentId);
+  return agent ? agent.name : agentId;
+}
+
+function analyzeLoopRisks(snippet, file, line, chain, toolsInChain = []) {
+  const loop = parseLoopConfig(snippet);
+  chain.loop = loop;
+  const ctx = {
+    agentId: chain.agentId,
+    agentName: agentNameForId(chain.agentId),
+    chainType: chain.type,
+    toolName: toolsInChain[0] || "myTool",
+  };
+  if (loop.isUnbounded) {
+    pushRisk(
+      "unbounded-loop",
+      "high",
+      file,
+      line,
+      `${chain.type} uses isLoopFinished() without stepCountIs or hasToolCall bounds — unbounded loop / cost risk.`,
+      loop.stopWhen || snippet,
+      chain.id,
+      chain.agentId,
+      ctx,
+    );
+  }
+  if (loop.toolChoiceRequired) {
+    const hasDoneTool = toolsInChain.some((name) => /^done$/i.test(name) || /done/i.test(name));
+    if (!hasDoneTool) {
+      pushRisk(
+        "required-tool-without-done",
+        "medium",
+        file,
+        line,
+        `${chain.type} sets toolChoice: 'required' but no terminating done tool was detected.`,
+        loop.toolChoice,
+        chain.id,
+        chain.agentId,
+        ctx,
+      );
+    }
+  }
+}
+
+function analyzeTelemetryRisks(snippet, file, line, chain, promptBindings) {
+  const telemetry = parseTelemetryConfig(snippet);
+  chain.telemetry = telemetry;
+  const ctx = {
+    agentId: chain.agentId,
+    agentName: agentNameForId(chain.agentId),
+    chainType: chain.type,
+    functionId: `${safeFunctionId(agentNameForId(chain.agentId))}_${slug(chain.type)}`,
+  };
+  const hasTrace = telemetry.isEnabled || hasTraceEvidence(snippet) || hasTraceEvidence(read(file));
+  chain.hasTrace = hasTrace;
+  if (!hasTrace) {
+    pushRisk("missing-trace", "high", file, line, `${chain.type} chain lacks trace ID, structured logging, or AI telemetry evidence.`, snippet, chain.id, chain.agentId, ctx);
+    return;
+  }
+  if (telemetry.hasTelemetry && telemetry.isEnabled && !telemetry.hasFunctionId) {
+    pushRisk(
+      "telemetry-without-function-id",
+      "medium",
+      file,
+      line,
+      `${chain.type} enables experimental_telemetry but omits functionId — traces won't group by task.`,
+      telemetry.raw,
+      chain.id,
+      chain.agentId,
+      ctx,
+    );
+  }
+  if (telemetry.isEnabled && (telemetry.recordInputsOn || telemetry.recordOutputsOn) && hasUserInputInPrompt(snippet, promptBindings)) {
+    pushRisk(
+      "telemetry-records-pii",
+      "medium",
+      file,
+      line,
+      `${chain.type} records inputs/outputs while prompts appear to include user content — disable recordInputs/recordOutputs for PII.`,
+      telemetry.raw,
+      chain.id,
+      chain.agentId,
+      ctx,
+    );
+  }
 }
 function id(prefix, file, line, extra = "") {
   return `${prefix}:${rel(file)}:${line}${extra ? `:${extra}` : ""}`;
@@ -494,6 +772,21 @@ function resolvePromptText(value, bindings) {
   return cleanMultiline(raw);
 }
 
+const promptLikeKeys = ["system", "prompt", "messages", "instructions"];
+
+function findPromptForValue(relative, kind, value, line, bindings) {
+  const resolved = capText(resolvePromptText(value, bindings) || value, 8000);
+  const evidence = preview(value, 240);
+  const candidates = records.prompts.filter(
+    (prompt) => prompt.file === relative && prompt.kind === kind && Math.abs(prompt.line - line) <= 100,
+  );
+  return (
+    candidates.find((prompt) => prompt.text === resolved || prompt.preview === preview(resolved, 180) || prompt.evidence === evidence) ||
+    candidates.find((prompt) => prompt.text && resolved && (prompt.text.includes(resolved) || resolved.includes(prompt.text))) ||
+    null
+  );
+}
+
 function pushPromptRecord({ file, relative, text, index, agent, kind, value, inline, valueType, name = "" }) {
   const line = lineOf(text, index);
   const literalBindings = collectPromptBindings(text);
@@ -599,7 +892,14 @@ function schemaSummary(snippet) {
   return keys.size ? [...keys].slice(0, 12).join(", ") : preview(schema, 180);
 }
 
-function pushRisk(kind, severity, file, line, message, evidence, targetId = "", agentId = "") {
+function pushRisk(kind, severity, file, line, message, evidence, targetId = "", agentId = "", fixContext = {}) {
+  const fixSnippet = buildFixSnippet(kind, {
+    agentId,
+    agentName: fixContext.agentName || agentNameForId(agentId),
+    chainType: fixContext.chainType || "",
+    toolName: fixContext.toolName || "",
+    functionId: fixContext.functionId || "",
+  });
   const risk = {
     id: id("risk", file, line, `${kind}:${records.risks.length + 1}`),
     kind,
@@ -609,7 +909,8 @@ function pushRisk(kind, severity, file, line, message, evidence, targetId = "", 
     message,
     evidence: preview(evidence, 220),
     evidenceFull: capText(evidence, 1200),
-    fix: riskFixHint(kind),
+    fix: fixSnippet,
+    fixSnippet,
     targetId,
     agentId,
   };
@@ -657,6 +958,7 @@ function describeAgent(agent, counts) {
   return `Static scan inference: ${agent.name} is detected from ${sourceText}. It ${actions.join(", ")}.`;
 }
 
+records.aiSdk = readAiSdkVersion(root);
 const files = walk(root);
 
 for (const file of files) {
@@ -680,6 +982,8 @@ for (const file of files) {
       if (pattern.regex.test(text)) aiPatterns.push(pattern.label);
     }
     if (/\bToolLoopAgent\b/.test(text)) aiPatterns.push("ToolLoopAgent");
+    if (/\bExperimental_Agent\b/.test(text)) aiPatterns.push("Experimental_Agent");
+    if (/\bexperimental_createMCPClient\b/.test(text)) aiPatterns.push("MCP");
     records.routes.push({
       id: id("route", file, 1),
       file: relative,
@@ -714,7 +1018,7 @@ for (const file of files) {
     });
   });
 
-  eachMatch(text, /(?:^|[^.\w$])\b(system|prompt|messages)\s*:\s*(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\[[\s\S]{0,700}?\]|[A-Za-z_$][\w$.[\]]*)/g, (m) => {
+  eachMatch(text, /(?:^|[^.\w$])\b(system|prompt|messages|instructions)\s*:\s*(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\[[\s\S]{0,700}?\]|[A-Za-z_$][\w$.[\]]*)/g, (m) => {
     const key = m[1] || "";
     const value = m[2] || "";
     const lineTail = text.slice(m.index, text.indexOf("\n", m.index) === -1 ? text.length : text.indexOf("\n", m.index));
@@ -726,7 +1030,7 @@ for (const file of files) {
       id: id("prompt", file, promptLine, `${key}:${records.prompts.length + 1}`),
       file: relative,
       line: promptLine,
-      agentId: registerAgent(fileAgent, file, promptLine, "prompt"),
+      agentId: registerAgent(inferAgent(file, text, m.index, key), file, promptLine, "prompt"),
       kind: key,
       inline,
       valueType: inline ? "inline literal" : "reference",
@@ -791,6 +1095,7 @@ for (const file of files) {
     const line = lineOf(text, m.index);
     const name = inferAssignedName(text, m.index, `tool_${records.tools.length + 1}`);
     const sideEffect = hasSideEffect(snippet) || hasSideEffect(extractProperty(snippet, "execute"));
+    const needsApproval = /\bneedsApproval\s*:\s*true\b/.test(snippet);
     const fields = schemaFields(snippet);
     const tool = {
       id: id("tool", file, line, name),
@@ -804,39 +1109,94 @@ for (const file of files) {
       schemaFields: fields,
       hasInputSchema: /\binputSchema\s*:/.test(snippet),
       hasExecute: /\bexecute\s*:/.test(snippet),
+      needsApproval,
       sideEffect,
       evidence: preview(snippet, 600),
       snippet: snippetOf(text, line),
     };
     records.tools.push(tool);
-    if (sideEffect) {
+    const toolCtx = { toolName: name, agentName: agentNameForId(tool.agentId) };
+    if (sideEffect && !needsApproval) {
       pushRisk(
-        "side-effect-tool",
+        "side-effect-without-approval",
         "high",
         file,
         line,
-        `Tool ${name} appears to perform side effects and should have trace IDs, authorization checks, and tests.`,
+        `Tool ${name} performs side effects without needsApproval — add human-in-the-loop before destructive actions.`,
         tool.evidence,
         tool.id,
         tool.agentId,
+        toolCtx,
+      );
+    } else if (sideEffect) {
+      pushRisk(
+        "side-effect-tool",
+        "medium",
+        file,
+        line,
+        `Tool ${name} performs side effects — ensure authorization checks, trace IDs, and integration tests.`,
+        tool.evidence,
+        tool.id,
+        tool.agentId,
+        toolCtx,
       );
     }
+  });
+
+  eachMatch(text, /\bdynamicTool\s*\(/g, (m) => {
+    const line = lineOf(text, m.index);
+    records.tools.push({
+      id: id("tool", file, line, `dynamic_${records.tools.length + 1}`),
+      file: relative,
+      line,
+      agentId: registerAgent(fileAgent, file, line, "tool"),
+      name: inferAssignedName(text, m.index, "dynamicTool"),
+      description: "dynamicTool (runtime-defined schema)",
+      descriptionFull: "",
+      schema: "dynamic",
+      schemaFields: [],
+      hasInputSchema: false,
+      hasExecute: true,
+      needsApproval: /\bneedsApproval\s*:\s*true\b/.test(extractBalancedCall(text, m.index)),
+      sideEffect: hasSideEffect(extractBalancedCall(text, m.index)),
+      evidence: preview(extractBalancedCall(text, m.index), 300),
+      snippet: snippetOf(text, line),
+      dynamic: true,
+    });
+  });
+
+  eachMatch(text, /\bexperimental_createMCPClient\s*\(/g, (m) => {
+    const line = lineOf(text, m.index);
+    records.mcpClients.push({
+      id: id("mcp", file, line),
+      file: relative,
+      line,
+      agentId: registerAgent(fileAgent, file, line, "mcp"),
+      evidence: preview(extractBalancedCall(text, m.index), 200),
+    });
+  });
+
+  eachMatch(text, /\bconvertToModelMessages\s*\(/g, (m) => {
+    const line = lineOf(text, m.index);
+    if (!records.routes.some((r) => r.file === relative)) return;
+    const route = records.routes.find((r) => r.file === relative);
+    if (route) route.hasMessagePersistence = true;
   });
 
   function pushModelCall(match, type) {
     const snippet = extractBalancedCall(text, match.index);
     const line = lineOf(text, match.index);
     const model = extractProperty(snippet, "model") || "No model property detected";
+    const outputMode = extractProperty(snippet, "output") || extractProperty(snippet, "experimental_output") || "";
     const promptRefs = [];
     const promptRefIds = [];
-    for (const key of ["system", "prompt", "messages"]) {
+    for (const key of promptLikeKeys) {
       const value = extractProperty(snippet, key);
       if (value) {
-        promptRefs.push(`${key}: ${preview(value, 90)}`);
-        const match = records.prompts.find(
-          (p) => p.file === relative && p.kind === key && (p.text === capText(value, 8000) || p.preview === preview(value, 180)),
-        );
-        if (match) promptRefIds.push(match.id);
+        const resolvedPrompt = resolvePromptText(value, promptBindings) || value;
+        promptRefs.push(`${key}: ${preview(resolvedPrompt, 120)}`);
+        const promptMatch = findPromptForValue(relative, key, value, line, promptBindings);
+        if (promptMatch) promptRefIds.push(promptMatch.id);
       }
     }
     const toolBlock = extractProperty(snippet, "tools");
@@ -846,11 +1206,12 @@ for (const file of files) {
         if (!["description", "parameters", "inputSchema", "execute"].includes(tm[1])) tools.push(tm[1]);
       });
     }
+    const agentId = registerAgent(inferAgent(file, text, match.index, type), file, line, "chain");
     const chain = {
       id: id("chain", file, line, slug(type)),
       file: relative,
       line,
-      agentId: registerAgent(inferAgent(file, text, match.index, type), file, line, "chain"),
+      agentId,
       type,
       model: preview(model, 120),
       modelFull: capText(model, 500),
@@ -859,17 +1220,19 @@ for (const file of files) {
       tools: [...new Set(tools)],
       toolIds: [],
       hasEval: hasEvalEvidence(text, file),
-      hasTrace: hasTraceEvidence(snippet) || hasTraceEvidence(text),
+      hasTrace: false,
+      structuredOutput: !!outputMode.trim(),
       evidence: preview(snippet, 260),
       snippet: snippetOf(text, line),
     };
+    registerModelUsage(model, file, line, type, agentId);
+    analyzeLoopRisks(snippet, file, line, chain, chain.tools);
+    analyzeTelemetryRisks(snippet, file, line, chain, promptBindings);
     records.modelCalls.push(chain);
     records.chains.push(chain);
+    const evalCtx = { agentName: agentNameForId(agentId), chainType: type };
     if (!chain.hasEval) {
-      pushRisk("missing-eval", "medium", file, line, `${type} chain lacks nearby eval or test evidence.`, snippet, chain.id, chain.agentId);
-    }
-    if (!chain.hasTrace) {
-      pushRisk("missing-trace", "high", file, line, `${type} chain lacks trace ID, structured logging, or AI telemetry evidence.`, snippet, chain.id, chain.agentId);
+      pushRisk("missing-eval", "medium", file, line, `${type} chain lacks nearby eval or test evidence.`, snippet, chain.id, chain.agentId, evalCtx);
     }
   }
 
@@ -879,32 +1242,102 @@ for (const file of files) {
     });
   }
 
-  eachMatch(text, /\bToolLoopAgent\b/g, (m) => {
+  eachMatch(text, /\bnew\s+ToolLoopAgent\s*\(/g, (m) => {
+    const snippet = extractBalancedCall(text, m.index);
     const line = lineOf(text, m.index);
-    const snippet = text.slice(Math.max(0, m.index - 220), Math.min(text.length, m.index + 700));
+    const model = extractProperty(snippet, "model") || "Agent loop";
+    const instructions = extractProperty(snippet, "instructions") || extractProperty(snippet, "system") || "";
+    const instructionKind = extractProperty(snippet, "instructions") ? "instructions" : "system";
+    const instructionPrompt = instructions ? findPromptForValue(relative, instructionKind, instructions, line, promptBindings) : null;
     const loopTools = records.tools.filter((tool) => tool.file === relative);
+    const agentId = registerAgent(inferAgent(file, text, m.index, "ToolLoopAgent"), file, line, "chain");
     const chain = {
       id: id("chain", file, line, "ToolLoopAgent"),
       file: relative,
       line,
-      agentId: registerAgent(inferAgent(file, text, m.index, "ToolLoopAgent"), file, line, "chain"),
+      agentId,
+      type: "ToolLoopAgent",
+      model: preview(model, 120),
+      modelFull: capText(model, 500),
+      prompts: instructions ? [`${instructionKind}: ${preview(resolvePromptText(instructions, promptBindings) || instructions, 120)}`] : [],
+      promptIds: instructionPrompt ? [instructionPrompt.id] : [],
+      tools: loopTools.map((tool) => tool.name),
+      toolIds: loopTools.map((tool) => tool.id),
+      hasEval: hasEvalEvidence(text, file),
+      hasTrace: false,
+      evidence: preview(snippet, 260),
+      snippet: snippetOf(text, line),
+    };
+    registerModelUsage(model, file, line, "ToolLoopAgent", agentId);
+    analyzeLoopRisks(snippet, file, line, chain, chain.tools);
+    analyzeTelemetryRisks(snippet, file, line, chain, promptBindings);
+    records.chains.push(chain);
+    const evalCtx = { agentName: agentNameForId(agentId), chainType: "ToolLoopAgent" };
+    if (!chain.hasEval) pushRisk("missing-eval", "medium", file, line, "ToolLoopAgent chain lacks nearby eval or test evidence.", snippet, chain.id, chain.agentId, evalCtx);
+  });
+
+  eachMatch(text, /\bnew\s+Experimental_Agent\s*\(/g, (m) => {
+    const snippet = extractBalancedCall(text, m.index);
+    const line = lineOf(text, m.index);
+    const model = extractProperty(snippet, "model") || "Experimental_Agent";
+    const agentId = registerAgent(inferAgent(file, text, m.index, "Experimental_Agent"), file, line, "chain");
+    const loopTools = records.tools.filter((tool) => tool.file === relative);
+    const chain = {
+      id: id("chain", file, line, "Experimental_Agent"),
+      file: relative,
+      line,
+      agentId,
+      type: "Experimental_Agent",
+      model: preview(model, 120),
+      modelFull: capText(model, 500),
+      prompts: [],
+      promptIds: [],
+      tools: loopTools.map((tool) => tool.name),
+      toolIds: loopTools.map((tool) => tool.id),
+      hasEval: hasEvalEvidence(text, file),
+      hasTrace: false,
+      evidence: preview(snippet, 260),
+      snippet: snippetOf(text, line),
+    };
+    records.experimentalAgents.push({ id: chain.id, file: relative, line, agentId });
+    registerModelUsage(model, file, line, "Experimental_Agent", agentId);
+    analyzeLoopRisks(snippet, file, line, chain, chain.tools);
+    analyzeTelemetryRisks(snippet, file, line, chain, promptBindings);
+    records.chains.push(chain);
+  });
+
+  eachMatch(text, /\bToolLoopAgent\b/g, (m) => {
+    if (/\bnew\s+ToolLoopAgent\s*\(/.test(text.slice(Math.max(0, m.index - 8), m.index + 20))) return;
+    const lineStart = text.lastIndexOf("\n", m.index) + 1;
+    const lineEnd = text.indexOf("\n", m.index);
+    const lineText = text.slice(lineStart, lineEnd === -1 ? text.length : lineEnd);
+    if (/^\s*import\b/.test(lineText)) return;
+    const line = lineOf(text, m.index);
+    if (records.chains.some((c) => c.file === relative && c.line === line && c.type === "ToolLoopAgent")) return;
+    const snippet = text.slice(Math.max(0, m.index - 220), Math.min(text.length, m.index + 700));
+    const agentId = registerAgent(inferAgent(file, text, m.index, "ToolLoopAgent"), file, line, "chain");
+    const chain = {
+      id: id("chain", file, line, "ToolLoopAgent-ref"),
+      file: relative,
+      line,
+      agentId,
       type: "ToolLoopAgent",
       model: "Agent loop",
       modelFull: "Agent loop",
       prompts: [],
       promptIds: [],
-      tools: loopTools.map((tool) => tool.name),
-      toolIds: loopTools.map((tool) => tool.id),
+      tools: records.tools.filter((tool) => tool.file === relative).map((tool) => tool.name),
+      toolIds: [],
       hasEval: hasEvalEvidence(text, file),
       hasTrace: hasTraceEvidence(text),
       evidence: preview(snippet, 260),
       snippet: snippetOf(text, line),
     };
     records.chains.push(chain);
-    if (!chain.hasEval) pushRisk("missing-eval", "medium", file, line, "ToolLoopAgent chain lacks nearby eval or test evidence.", snippet, chain.id, chain.agentId);
-    if (!chain.hasTrace) pushRisk("missing-trace", "high", file, line, "ToolLoopAgent chain lacks trace ID, structured logging, or telemetry evidence.", snippet, chain.id, chain.agentId);
   });
 }
+
+finalizeModelCatalog();
 
 for (const route of records.routes) {
   if (route.aiPatterns.length && !route.hasTrace) {
@@ -927,11 +1360,27 @@ function postProcessCrossLinks() {
     toolIndex.set(`${tool.file}::${tool.name}`, tool.id);
     toolIndex.set(`${tool.agentId}::${tool.name}`, tool.id);
   }
+  const agentHasPrimaryFlow = (agentId) =>
+    records.chains.some((item) => item.agentId === agentId) ||
+    records.routes.some((item) => item.agentId === agentId) ||
+    records.uiEntrypoints.some((item) => item.agentId === agentId) ||
+    records.prompts.some((item) => item.agentId === agentId);
   for (const chain of records.chains) {
     if (!chain.toolIds || !chain.toolIds.filter(Boolean).length) {
       chain.toolIds = (chain.tools || []).map(
         (name) => toolIndex.get(`${chain.file}::${name}`) || toolIndex.get(`${chain.agentId}::${name}`) || "",
       );
+    }
+    for (const toolId of chain.toolIds || []) {
+      const tool = records.tools.find((item) => item.id === toolId);
+      if (!tool || tool.agentId === chain.agentId || tool.file !== chain.file || agentHasPrimaryFlow(tool.agentId)) continue;
+      const previousAgentId = tool.agentId;
+      tool.agentId = chain.agentId;
+      for (const risk of records.risks) {
+        if (risk.targetId === tool.id || (risk.agentId === previousAgentId && risk.file === tool.file && Math.abs(risk.line - tool.line) <= 2)) {
+          risk.agentId = chain.agentId;
+        }
+      }
     }
     if (!chain.promptIds) chain.promptIds = [];
   }
@@ -973,7 +1422,7 @@ function matchRouteForEntry(entry, routes) {
 }
 
 function promptStepTitle(prompt) {
-  const kind = prompt.kind === "system" ? "System instructions are added" : prompt.kind === "messages" ? "Conversation context is added" : "User instructions are added";
+  const kind = prompt.kind === "system" || prompt.kind === "instructions" ? "System instructions are added" : prompt.kind === "messages" ? "Conversation context is added" : "User instructions are added";
   const name = clean(prompt.name || "");
   if (name && name.toLowerCase() !== clean(prompt.kind).toLowerCase()) return `${kind} · ${name}`;
   if (prompt.valueType === "reference") return `${kind} from a shared reference`;
@@ -1042,7 +1491,7 @@ function buildAgentFlow(agentId) {
 
   for (const chain of chains) {
     const chainPrompts = (chain.promptIds || [])
-      .map((promptId) => prompts.find((item) => item.id === promptId))
+      .map((promptId) => records.prompts.find((item) => item.id === promptId))
       .filter(Boolean)
       .sort((a, b) => a.line - b.line);
     for (const prompt of chainPrompts) {
@@ -1081,7 +1530,7 @@ function buildAgentFlow(agentId) {
     });
 
     const chainTools = (chain.toolIds || [])
-      .map((toolId) => tools.find((tool) => tool.id === toolId))
+      .map((toolId) => records.tools.find((tool) => tool.id === toolId))
       .filter(Boolean);
     const readTools = chainTools.filter((tool) => !tool.sideEffect);
     const effectTools = chainTools.filter((tool) => tool.sideEffect);
@@ -1324,7 +1773,8 @@ function removeLegacyOutputs() {
 }
 
 function write(name, body) {
-  if (legacyOutputFiles.includes(name) || name.endsWith(".md")) return;
+  if (legacyOutputFiles.includes(name)) return;
+  if (name.endsWith(".md") && name !== "agent-map.md") return;
   fs.writeFileSync(path.join(outDir, name), body);
 }
 
@@ -1356,12 +1806,135 @@ function renderList(items, empty, render) {
   return `<div class="list">${items.map(render).join("")}</div>`;
 }
 
-function tracePayload(generatedAt) {
+function riskSignature(risk) {
+  return `${risk.kind}|${risk.file}|${risk.line}|${risk.message}`;
+}
+
+function computeScanDiff(previousTrace) {
+  if (!previousTrace || !Array.isArray(previousTrace.risks)) {
+    return { hasPrevious: false, newRisks: [], fixedRisks: [], unchanged: records.risks.length };
+  }
+  const prevBySig = new Map(previousTrace.risks.map((r) => [riskSignature(r), r]));
+  const currBySig = new Map(records.risks.map((r) => [riskSignature(r), r]));
+  const newRisks = records.risks.filter((r) => !prevBySig.has(riskSignature(r)));
+  const fixedRisks = previousTrace.risks.filter((r) => !currBySig.has(riskSignature(r)));
+  return {
+    hasPrevious: true,
+    previousAt: previousTrace.generatedAt || "",
+    newRisks,
+    fixedRisks,
+    unchanged: records.risks.length - newRisks.length,
+    newCount: newRisks.length,
+    fixedCount: fixedRisks.length,
+  };
+}
+
+function buildAgentMapMarkdown(trace) {
+  const lines = [
+    "# Agent Map",
+    "",
+    `Generated ${trace.generatedAt} from \`${trace.root}\`.`,
+    "",
+    `AI SDK: **${trace.aiSdk?.label || "unknown"}**`,
+    "",
+  ];
+  for (const agent of trace.agents || []) {
+    lines.push(`## ${agent.name} (\`${agent.id}\`)`);
+    lines.push("");
+    lines.push(agent.description || "");
+    lines.push("");
+    const agentChains = (trace.chains || []).filter((c) => c.agentId === agent.id);
+    const agentTools = (trace.tools || []).filter((t) => t.agentId === agent.id);
+    const agentRoutes = (trace.routes || []).filter((r) => r.agentId === agent.id);
+    const agentRisks = (trace.risks || []).filter((r) => r.agentId === agent.id);
+    if (agentRoutes.length) {
+      lines.push("### Routes");
+      for (const route of agentRoutes) {
+        lines.push(`- \`${route.file}\` (${(route.methods || []).join("/") || "handler"}) — ${(route.aiPatterns || []).join(", ") || "no AI patterns"}`);
+      }
+      lines.push("");
+    }
+    if (agentChains.length) {
+      lines.push("### Model calls");
+      for (const chain of agentChains) {
+        const loop = chain.loop?.stepCount ? ` · stop@${chain.loop.stepCount}` : chain.loop?.hasStopWhen ? " · bounded" : "";
+        const tel = chain.telemetry?.isEnabled ? " · telemetry on" : "";
+        lines.push(`- \`${chain.file}:${chain.line}\` **${chain.type}** — model: ${chain.model}${loop}${tel}`);
+        if (chain.tools?.length) lines.push(`  - tools: ${chain.tools.join(", ")}`);
+      }
+      lines.push("");
+    }
+    if (agentTools.length) {
+      lines.push("### Tools");
+      for (const tool of agentTools) {
+        const flags = [tool.sideEffect ? "side-effect" : "read-only", tool.needsApproval ? "needsApproval" : null].filter(Boolean).join(", ");
+        lines.push(`- \`${tool.name}\` at \`${tool.file}:${tool.line}\` (${flags}) — ${tool.schema}`);
+      }
+      lines.push("");
+    }
+    if (agentRisks.length) {
+      lines.push("### Risks");
+      for (const risk of agentRisks) {
+        lines.push(`- [${risk.severity}] ${risk.message} (\`${risk.file}:${risk.line}\`)`);
+      }
+      lines.push("");
+    }
+    const flow = trace.flows?.[agent.id] || [];
+    if (flow.length) {
+      lines.push("### Flow");
+      lines.push("```mermaid");
+      lines.push("flowchart TD");
+      flow.forEach((step, index) => {
+        const nodeId = `S${index}`;
+        const label = (step.title || step.phase).replace(/"/g, "'");
+        lines.push(`  ${nodeId}["${label}"]`);
+        if (index > 0) lines.push(`  S${index - 1} --> ${nodeId}`);
+      });
+      lines.push("```");
+      lines.push("");
+    }
+  }
+  if (trace.modelCatalog?.length) {
+    lines.push("## Model catalog");
+    for (const entry of trace.modelCatalog) {
+      lines.push(`- **${entry.model}** — ${entry.usages} use(s) across ${entry.fileCount} file(s)`);
+    }
+    lines.push("");
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function buildAgentContextMarkdown(agent, trace) {
+  const chunks = [
+    `# ${agent.name} context`,
+    "",
+    agent.description || "",
+    "",
+    "## Routes",
+    ...((trace.routes || []).filter((r) => r.agentId === agent.id).map((r) => `- ${r.file} (${(r.methods || []).join("/")})`)),
+    "",
+    "## Chains",
+    ...((trace.chains || []).filter((c) => c.agentId === agent.id).map((c) => `- ${c.type} at ${c.file}:${c.line} model=${c.model}`)),
+    "",
+    "## Tools",
+    ...((trace.tools || []).filter((t) => t.agentId === agent.id).map((t) => `- ${t.name}: ${t.description} (${t.sideEffect ? "side-effect" : "read"})`)),
+    "",
+    "## Risks",
+    ...((trace.risks || []).filter((r) => r.agentId === agent.id).map((r) => `- [${r.severity}] ${r.message}`)),
+  ];
+  return chunks.filter((line) => line !== undefined).join("\n");
+}
+
+function tracePayload(generatedAt, scanDiff) {
+  const highRisks = records.risks.filter((r) => r.severity === "high").length;
+  const mediumRisks = records.risks.filter((r) => r.severity === "medium").length;
   return {
     generatedAt,
     root,
     scanner: "agent-observe-skill.sh",
     selection,
+    aiSdk: records.aiSdk,
+    scanDiff,
     summary: {
       agents: records.agents.length,
       prompts: records.prompts.length,
@@ -1370,10 +1943,17 @@ function tracePayload(generatedAt) {
       routes: records.routes.length,
       uiEntrypoints: records.uiEntrypoints.length,
       risks: records.risks.length,
+      highRisks,
+      mediumRisks,
+      mcpClients: records.mcpClients.length,
+      models: records.modelCatalog.length,
     },
     flows: buildAllFlows(),
     flowNote:
       "This is the likely product journey from user action to AI response. It is inferred from static code, so runtime tool order may differ.",
+    agentContexts: Object.fromEntries(
+      records.agents.map((agent) => [agent.id, buildAgentContextMarkdown(agent, { ...records, flows: buildAllFlows() })]),
+    ),
     ...records,
   };
 }
@@ -1382,6 +1962,11 @@ function renderSimpleHtmlReport(trace, report) {
   const json = JSON.stringify({ ...trace, markdownReport: report }).replace(/</g, "\\u003c");
   const selectionLabel = escapeHtml(trace.selection.label || "All detected agents");
   const generatedAt = escapeHtml(trace.generatedAt);
+  const sdkLabel = escapeHtml(trace.aiSdk?.label || "ai package not detected");
+  const diffSummary = trace.scanDiff?.hasPrevious
+    ? ` · ${trace.scanDiff.newCount} new / ${trace.scanDiff.fixedCount} fixed risks`
+    : "";
+  const highRiskCount = trace.summary?.highRisks ?? 0;
   const scriptPath = path.join(path.dirname(selfPath), "_report-ui-script.js");
   let clientScript = "";
   try {
@@ -1398,64 +1983,61 @@ function renderSimpleHtmlReport(trace, report) {
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23101410'/%3E%3Cpath d='M16 32c5-9 11-13 16-13s11 4 16 13c-5 9-11 13-16 13s-11-4-16-13Z' fill='none' stroke='%23f4f7ef' stroke-width='5' stroke-linejoin='round'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%232f80ed'/%3E%3C/svg%3E" />
     <meta name="description" content="Local Agent Observe scan results for prompts, tools, model calls, routes, and risks." />
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css" />
     <script>
       tailwind.config = {
         theme: {
           extend: {
             fontFamily: {
-              sans: ["Inter", "sans-serif"],
-              mono: ["JetBrains Mono", "monospace"],
-            },
-            colors: {
-              gray: {
-                50: "#fafafa",
-                100: "#f5f5f5",
-                200: "#e5e5e5",
-                300: "#d4d4d4",
-                400: "#a3a3a3",
-                500: "#737373",
-                600: "#525252",
-                700: "#404040",
-                800: "#262626",
-                900: "#171717",
-              },
+              sans: ["Geist", "ui-sans-serif", "system-ui", "sans-serif"],
+              mono: ["Geist Mono", "ui-monospace", "monospace"],
             },
           },
         },
       };
     </script>
     <style>
-      body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+      html { color-scheme: dark; }
+      body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; background: #000; color: #ededed; }
+      .v-grid-bg { background-image: linear-gradient(to right, rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.04) 1px, transparent 1px); background-size: 64px 64px; mask-image: radial-gradient(ellipse 85% 65% at 50% 0%, #000 30%, transparent 100%); }
+      .v-glow { background: radial-gradient(ellipse 70% 55% at 50% -10%, rgba(0,112,243,0.18), transparent 65%); }
       .flow-step-nested .flow-rail { padding-left: 0.35rem; }
       .flow-step-nested .flow-card { margin-left: 0.25rem; }
       #flow-timeline { padding-left: 0.15rem; }
     </style>
   </head>
-  <body class="bg-white text-gray-900 selection:bg-gray-900 selection:text-white min-h-screen flex flex-col relative overflow-x-hidden">
-    <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[400px] opacity-[0.15] pointer-events-none" style="background: radial-gradient(ellipse at top, #000000 0%, transparent 70%)"></div>
-    <main class="flex-grow w-full max-w-6xl mx-auto px-6 pt-10 pb-16 relative z-10 space-y-4">
+  <body class="bg-black text-[#ededed] selection:bg-[#0070f3] selection:text-white min-h-screen flex flex-col relative overflow-x-hidden font-sans">
+    <div class="v-grid-bg fixed inset-0 pointer-events-none" aria-hidden="true"></div>
+    <div class="v-glow fixed inset-x-0 top-0 h-[420px] pointer-events-none" aria-hidden="true"></div>
+    <main class="flex-grow w-full max-w-[1500px] mx-auto px-6 pt-10 pb-16 relative z-10 space-y-4">
       <div>
         <div class="flex flex-wrap gap-2 mb-3" id="agents" aria-label="Select agent"></div>
-        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900" id="agent-name">Results</h1>
-        <p class="mt-1 max-w-3xl text-[15px] leading-relaxed text-gray-600" id="agent-description"></p>
-        <p class="mt-1 text-[13px] text-gray-500">Scope: <span class="font-medium text-gray-900">${selectionLabel}</span> · ${generatedAt}</p>
+        <h1 class="text-2xl sm:text-3xl font-semibold tracking-[-0.03em] text-[#ededed]" id="agent-name">Results</h1>
+        <p class="mt-1 max-w-3xl text-[15px] leading-relaxed text-[#888]" id="agent-description"></p>
+        <p class="mt-1 text-[13px] text-[#666]">Scope: <span class="font-medium text-[#ededed]">${selectionLabel}</span> · AI SDK: <span class="font-medium text-[#3291ff]">${sdkLabel}</span> · ${generatedAt}${diffSummary}</p>
+        <p class="mt-1 text-[13px] text-[#666]" id="scan-diff-banner"></p>
       </div>
-      <section class="p-4 sm:p-5 rounded-2xl border border-gray-200 bg-white shadow-sm" aria-label="Agent execution flow">
+      <section class="p-4 sm:p-5 rounded-xl border border-[#333] bg-[#0a0a0a]" aria-label="Agent execution flow">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p class="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1" id="section-kicker">User journey</p>
-            <p class="text-[12px] text-gray-500 leading-relaxed" id="flow-note"></p>
+            <p class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#666] mb-1" id="section-kicker">User journey</p>
+            <p class="text-[12px] text-[#888] leading-relaxed" id="flow-note"></p>
           </div>
-          <div class="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1" id="view-tabs" aria-label="Report view"></div>
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="hidden sm:flex items-center gap-2" id="risk-filters" aria-label="Risk severity filters"></div>
+            <input type="search" id="report-search" placeholder="Search steps & risks…" class="rounded-lg border border-[#333] bg-[#111] px-3 py-1.5 text-sm text-[#ededed] placeholder:text-[#666] focus:outline-none focus:ring-2 focus:ring-[#0070f3]/30 focus:border-[#0070f3]" />
+            <button type="button" id="copy-agent-context" class="rounded-lg border border-[#333] bg-[#111] px-3 py-1.5 text-xs font-medium text-[#ededed] hover:bg-[#1a1a1a] hover:border-[#555]">Copy agent context</button>
+            <div class="inline-flex rounded-lg border border-[#333] bg-[#111] p-1" id="view-tabs" aria-label="Report view"></div>
+          </div>
         </div>
-        <div class="grid lg:grid-cols-[minmax(300px,1fr)_minmax(300px,1fr)] gap-8 lg:gap-10 items-start">
-          <div class="max-h-[min(72vh,720px)] overflow-y-auto pr-2 -mr-2" id="flow-timeline"></div>
+        <div id="mermaid-flow" class="mb-4 hidden rounded-xl border border-[#333] bg-[#050505] p-4 overflow-x-auto"></div>
+        <div class="grid xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)] gap-6 lg:gap-8 items-start">
+          <div class="max-h-[min(76vh,820px)] overflow-y-auto pr-2 -mr-2" id="flow-timeline"></div>
           <div class="lg:sticky lg:top-6">
-            <div class="text-[13px] font-semibold uppercase tracking-wide text-gray-500 mb-3" id="detail-title">Step details</div>
-            <div class="min-h-[280px] rounded-xl border border-gray-200 bg-white p-5 shadow-sm" id="detail-box"></div>
+            <div class="text-[13px] font-semibold uppercase tracking-[0.1em] text-[#666] mb-3" id="detail-title">Step details</div>
+            <div class="min-h-[560px] rounded-xl border border-[#333] bg-[#0a0a0a] p-5" id="detail-box"></div>
           </div>
         </div>
       </section>
@@ -1500,7 +2082,7 @@ export default function AgentObserveSkillPage() {
   const agent = data.agents.find((item: any) => item.id === agentId);
   const byAgent = (items: any[]) => (items || []).filter((item: any) => item.agentId === agentId);
   const kinds = view === "risks" ? riskKinds : reportKinds;
-  const promptTitle = (prompt: any) => prompt.kind === "system" ? "System instructions are added" : prompt.kind === "messages" ? "Conversation context is added" : prompt.valueType === "reference" ? "User instructions are added from a shared reference" : prompt.valueType === "named constant" ? "User instructions are added from a named prompt" : "User instructions are added";
+  const promptTitle = (prompt: any) => prompt.kind === "system" || prompt.kind === "instructions" ? "System instructions are added" : prompt.kind === "messages" ? "Conversation context is added" : prompt.valueType === "reference" ? "User instructions are added from a shared reference" : prompt.valueType === "named constant" ? "User instructions are added from a named prompt" : "User instructions are added";
   const rows = useMemo(() => {
     if (kind === "entrypoints") return byAgent(data.uiEntrypoints).map((entry: any) => ({ meta: "User entry", title: "User sends a chat message", code: "What this means: this is where someone starts the AI experience.\\nHow the user starts this: " + entry.hook + "\\nWhere the message is sent: " + entry.api + "\\nCode: " + entry.file + ":" + entry.line }));
     if (kind === "tools") return byAgent(data.tools).map((tool: any) => ({ meta: tool.sideEffect ? "Action" : "Lookup", title: tool.sideEffect ? "AI can change something outside the chat" : "AI can look up information", code: "What this means: " + (tool.sideEffect ? "the AI can call this helper to change product state, so permissions and logging matter." : "the AI can call this helper to fetch information before answering.") + "\\nTool name: " + tool.name + "\\nDescription: " + tool.description + "\\nInput data: " + tool.schema + "\\nCode: " + tool.file + ":" + tool.line }));
@@ -1694,21 +2276,55 @@ ${rows(records.prompts.filter((p) => p.inline), "No inline prompts detected.", (
 `;
 
 write("report.md", report);
-const trace = tracePayload(generatedAt);
-write("agent-report.html", renderSimpleHtmlReport(trace, report));
-write(
-  "trace-map.json",
-  JSON.stringify(trace, null, 2) + "\n",
-);
+
+const jsonPath = path.join(outDir, "agent-report.json");
+const previousPath = path.join(outDir, "agent-report.previous.json");
+let previousTrace = null;
+if (fs.existsSync(jsonPath)) {
+  try {
+    previousTrace = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+    fs.copyFileSync(jsonPath, previousPath);
+  } catch {
+    previousTrace = null;
+  }
+}
+const scanDiff = computeScanDiff(previousTrace);
+const trace = tracePayload(generatedAt, scanDiff);
+const traceJson = JSON.stringify(trace, null, 2) + "\n";
+write("agent-report.json", traceJson);
+write("agent-map.md", buildAgentMapMarkdown(trace));
+
+if (outputFormat !== "json") {
+  write("agent-report.html", renderSimpleHtmlReport(trace, report));
+}
+
 const nextPagePath = maybeWriteNextPage(trace);
 const excludePatterns = [".agent-observe-skill/"];
 if (nextPagePath) excludePatterns.push("app/agent-observe-skill/");
 const excludePath = addLocalGitExcludes(excludePatterns);
 
-console.log(`Agent Observe report written to ${outDir}`);
-console.log(`Open ${path.join(outDir, "agent-report.html")} in your browser`);
+const highRisks = records.risks.filter((r) => r.severity === "high").length;
+const mediumRisks = records.risks.filter((r) => r.severity === "medium").length;
+
+console.log(`Agent Observe scan complete`);
+console.log(`  AI SDK: ${records.aiSdk?.label || "not detected"}`);
+console.log(`  Agents: ${records.agents.length} · Chains: ${records.chains.length} · Tools: ${records.tools.length} · Risks: ${records.risks.length} (${highRisks} high, ${mediumRisks} medium)`);
+if (scanDiff.hasPrevious) {
+  console.log(`  Since last scan: ${scanDiff.newCount} new, ${scanDiff.fixedCount} fixed`);
+}
+if (outputFormat !== "json" && !ciMode) {
+  console.log(`Open ${path.join(outDir, "agent-report.html")} in your browser`);
+} else {
+  console.log(`JSON written to ${path.join(outDir, "agent-report.json")}`);
+}
+console.log(`Agent map: ${path.join(outDir, "agent-map.md")}`);
 if (nextPagePath) console.log(`Next.js page written to ${nextPagePath}`);
 if (excludePath) console.log(`Generated artifacts are locally ignored via ${excludePath}`);
+
+if (ciMode && highRisks > maxHighRisks) {
+  console.error(`CI failed: ${highRisks} high-severity risk(s) exceed --max-high ${maxHighRisks}`);
+  process.exit(1);
+}
 NODE
   exit $?
 fi
@@ -1781,9 +2397,9 @@ while IFS= read -r file; do
     printf -- '- `%s` client chat entrypoint\n' "$rel_file" >> "$ROUTES"
   fi
 
-  if grep -Eq '\b(system|prompt|messages)\s*:' "$file"; then
+  if grep -Eq '\b(system|prompt|messages|instructions)\s*:' "$file"; then
     prompt_count=$((prompt_count + 1))
-    grep -nE '\b(system|prompt|messages)\s*:' "$file" | head -20 |
+    grep -nE '\b(system|prompt|messages|instructions)\s*:' "$file" | head -20 |
       sed "s#^#- \`$rel_file:#; s#:#\` #" >> "$PROMPTS"
   fi
 

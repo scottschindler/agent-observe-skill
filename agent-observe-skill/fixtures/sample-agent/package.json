@@ -1,0 +1,9 @@
+{
+  "name": "sample-agent",
+  "private": true,
+  "dependencies": {
+    "ai": "^6.0.0",
+    "@ai-sdk/openai": "^1.0.0",
+    "zod": "^3.0.0"
+  }
+}

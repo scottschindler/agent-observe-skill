@@ -4,6 +4,9 @@ set -u
 ROOT=""
 AGENT_FILTER="${AGENT_OBSERVE_AGENT:-}"
 LIST_AGENTS=0
+CI_MODE="${AGENT_OBSERVE_CI:-0}"
+OUTPUT_FORMAT="${AGENT_OBSERVE_FORMAT:-html}"
+MAX_HIGH="${AGENT_OBSERVE_MAX_HIGH:-999}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -19,13 +22,37 @@ while [ "$#" -gt 0 ]; do
       LIST_AGENTS=1
       shift
       ;;
+    --ci)
+      CI_MODE=1
+      OUTPUT_FORMAT="json"
+      shift
+      ;;
+    --format)
+      OUTPUT_FORMAT="${2:-html}"
+      shift 2
+      ;;
+    --format=*)
+      OUTPUT_FORMAT="${1#--format=}"
+      shift
+      ;;
+    --max-high)
+      MAX_HIGH="${2:-0}"
+      shift 2
+      ;;
+    --max-high=*)
+      MAX_HIGH="${1#--max-high=}"
+      shift
+      ;;
     --help|-h)
       cat <<'HELP'
-Usage: bash skill.sh [repo-path] [--agent <agent-name-or-id[,agent-name-or-id...]>] [--list-agents]
+Usage: bash skill.sh [repo-path] [--agent <agent-name-or-id[,agent-name-or-id...]>] [--list-agents] [--ci] [--format html|json] [--max-high N]
 
 Options:
   --agent <value>   Scan one or more detected agents. Accepts shown ids, names, comma-separated values, or "all".
   --list-agents     Print detected agents and exit without writing reports.
+  --ci              CI mode: write JSON, print summary, exit non-zero if high risks exceed --max-high.
+  --format <value>  Output format: html (default) or json.
+  --max-high <n>    Max allowed high-severity risks before CI exit 1 (default: 999; use 0 in CI).
   --help            Show this help.
 HELP
       exit 0
@@ -80,7 +107,7 @@ if [ -t 0 ] && [ -t 1 ]; then
 fi
 
 if command -v node >/dev/null 2>&1; then
-  SKILL_SELF="$SELF_PATH" AGENT_OBSERVE_AGENT="$AGENT_FILTER" AGENT_OBSERVE_LIST="$LIST_AGENTS" AGENT_OBSERVE_INTERACTIVE="$INTERACTIVE" node - "$ROOT" "$OUT_DIR" <<'NODE'
+  SKILL_SELF="$SELF_PATH" AGENT_OBSERVE_AGENT="$AGENT_FILTER" AGENT_OBSERVE_LIST="$LIST_AGENTS" AGENT_OBSERVE_INTERACTIVE="$INTERACTIVE" AGENT_OBSERVE_CI="$CI_MODE" AGENT_OBSERVE_FORMAT="$OUTPUT_FORMAT" AGENT_OBSERVE_MAX_HIGH="$MAX_HIGH" node - "$ROOT" "$OUT_DIR" <<'NODE'
 const fs = require("fs");
 const path = require("path");
 const childProcess = require("child_process");
@@ -91,6 +118,9 @@ const selfPath = path.resolve(process.env.SKILL_SELF || "");
 const requestedAgent = clean(process.env.AGENT_OBSERVE_AGENT || "");
 const listAgentsOnly = process.env.AGENT_OBSERVE_LIST === "1";
 const interactive = process.env.AGENT_OBSERVE_INTERACTIVE === "1";
+const ciMode = process.env.AGENT_OBSERVE_CI === "1";
+const outputFormat = clean(process.env.AGENT_OBSERVE_FORMAT || "html") || "html";
+const maxHighRisks = Number(process.env.AGENT_OBSERVE_MAX_HIGH ?? 999);
 
 const ignoreDirs = new Set([
   ".git",
@@ -129,6 +159,11 @@ const records = {
   uiEntrypoints: [],
   modelCalls: [],
   risks: [],
+  modelCatalog: [],
+  mcpClients: [],
+  experimentalAgents: [],
+  aiSdk: null,
+  scanDiff: null,
 };
 
 function rel(file) {
@@ -216,15 +251,258 @@ function schemaFields(snippet) {
   return fields.slice(0, 24);
 }
 
-function riskFixHint(kind) {
-  const hints = {
-    "inline-prompt": "Extract the prompt to a named constant or dedicated file, then add eval coverage.",
-    "side-effect-tool": "Add trace IDs, authorization checks, and integration tests for this tool's execute handler.",
-    "missing-eval": "Add promptfoo, vitest, or runtime evals near this chain.",
-    "missing-trace": "Add traceId, structured logging, or AI SDK experimental_telemetry.",
-    "route-without-trace": "Instrument this API route with trace metadata before model calls return.",
+function safeFunctionId(value) {
+  return slug(value || "agent").replace(/-/g, "_");
+}
+
+function buildFixSnippet(kind, ctx = {}) {
+  const agentName = ctx.agentName || ctx.agentId || "agent";
+  const functionId = ctx.functionId || `${safeFunctionId(agentName)}_chain`;
+  const toolName = ctx.toolName || "myTool";
+  const chainType = ctx.chainType || "streamText";
+  const snippets = {
+    "inline-prompt": `// prompts/${safeFunctionId(agentName)}.ts\nexport const ${safeFunctionId(agentName)}System = \`...\`;\n\n// In your ${chainType} call:\nsystem: ${safeFunctionId(agentName)}System,`,
+    "side-effect-tool": `// Add approval gate for side-effecting tools (AI SDK 5+)\n${toolName}: tool({\n  description: '...',\n  inputSchema: z.object({ ... }),\n  needsApproval: true,\n  execute: async (input) => { /* ... */ },\n}),`,
+    "side-effect-without-approval": `needsApproval: true, // require human approval before ${toolName} runs`,
+    "missing-eval": `// vitest or promptfoo near this chain\ndescribe('${agentName}', () => {\n  it('handles expected tool flow', async () => {\n    const result = await ${chainType}({ /* ... */ });\n    expect(result.text).toBeTruthy();\n  });\n});`,
+    "missing-trace": `experimental_telemetry: {\n  isEnabled: true,\n  functionId: '${functionId}',\n  metadata: { agent: '${agentName}' },\n},`,
+    "telemetry-without-function-id": `experimental_telemetry: {\n  isEnabled: true,\n  functionId: '${functionId}', // groups traces in Sentry/Langfuse/SigNoz\n},`,
+    "telemetry-records-pii": `experimental_telemetry: {\n  isEnabled: true,\n  functionId: '${functionId}',\n  recordInputs: false,  // disable if prompts contain user PII\n  recordOutputs: false,\n},`,
+    "route-without-trace": `// At route entry, propagate trace context\nconst traceId = request.headers.get('x-trace-id') ?? crypto.randomUUID();\n// Pass traceId into ${chainType} experimental_telemetry.metadata`,
+    "unbounded-loop": `stopWhen: stepCountIs(10), // tighten for production; AI SDK default is stepCountIs(20)`,
+    "required-tool-without-done": `// Add a terminating done tool when using toolChoice: 'required'\ndone: tool({\n  description: 'Signal task completion',\n  inputSchema: z.object({ summary: z.string() }),\n  // no execute — model calls this to stop the loop\n}),`,
+    "scattered-models": `// Centralize model selection\n// lib/models.ts\nexport const agentModels = {\n  ${safeFunctionId(agentName)}: openai('gpt-4.1-mini'),\n};`,
   };
-  return hints[kind] || "Review this finding and add observability or tests.";
+  return snippets[kind] || "Review this finding and add observability, tests, or loop bounds.";
+}
+
+function readAiSdkVersion(scanRoot) {
+  const candidates = [
+    path.join(scanRoot, "package.json"),
+    path.join(scanRoot, "apps", "web", "package.json"),
+    path.join(scanRoot, "packages", "api", "package.json"),
+  ];
+  let version = "";
+  let source = "";
+  for (const pkgPath of candidates) {
+    if (!fs.existsSync(pkgPath)) continue;
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      const deps = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies };
+      if (deps.ai) {
+        version = String(deps.ai).replace(/^[\^~>=<]+/, "");
+        source = rel(pkgPath);
+        break;
+      }
+    } catch {
+      /* ignore malformed package.json */
+    }
+  }
+  const major = version ? Number(version.split(".")[0]) : null;
+  return {
+    version: version || "not detected",
+    major: Number.isFinite(major) ? major : null,
+    source,
+    usesStopWhen: major === null || major >= 5,
+    usesMaxSteps: major !== null && major < 5,
+    label: version ? `ai@${version}` : "ai package not found",
+  };
+}
+
+function parseLoopConfig(snippet) {
+  const stopWhen = extractProperty(snippet, "stopWhen") || "";
+  const maxSteps = extractProperty(snippet, "maxSteps") || "";
+  const prepareStep = extractProperty(snippet, "prepareStep") || "";
+  const onStepFinish = extractProperty(snippet, "onStepFinish") || "";
+  const toolChoice = extractProperty(snippet, "toolChoice") || "";
+  const activeTools = extractProperty(snippet, "activeTools") || "";
+  const hasStopWhen = !!stopWhen.trim();
+  const hasMaxSteps = !!maxSteps.trim();
+  const stepCountMatch = stopWhen.match(/stepCountIs\s*\(\s*(\d+)/) || maxSteps.match(/(\d+)/);
+  const stepCount = stepCountMatch ? stepCountMatch[1] : "";
+  const isUnbounded =
+    /\bisLoopFinished\s*\(\s*\)/.test(stopWhen) &&
+    !/stepCountIs|hasToolCall/.test(`${stopWhen} ${maxSteps}`);
+  const toolChoiceRequired = /['"]required['"]/.test(toolChoice) || toolChoice === "required";
+  return {
+    stopWhen: preview(stopWhen, 120),
+    maxSteps: preview(maxSteps, 80),
+    prepareStep: !!prepareStep.trim(),
+    onStepFinish: !!onStepFinish.trim(),
+    toolChoice: preview(toolChoice, 80),
+    activeTools: preview(activeTools, 120),
+    hasStopWhen: hasStopWhen || hasMaxSteps,
+    stepCount,
+    isUnbounded,
+    toolChoiceRequired,
+  };
+}
+
+function parseTelemetryConfig(snippet) {
+  const telemetryRaw = extractProperty(snippet, "experimental_telemetry") || "";
+  const hasTelemetry = /\bexperimental_telemetry\b/.test(snippet);
+  const isEnabled = /isEnabled\s*:\s*true/.test(telemetryRaw) || (hasTelemetry && !/isEnabled\s*:\s*false/.test(telemetryRaw));
+  const hasFunctionId = /functionId\s*:/.test(telemetryRaw);
+  const recordInputsOn = hasTelemetry && !/recordInputs\s*:\s*false/.test(telemetryRaw);
+  const recordOutputsOn = hasTelemetry && !/recordOutputs\s*:\s*false/.test(telemetryRaw);
+  return {
+    hasTelemetry,
+    isEnabled,
+    hasFunctionId,
+    recordInputsOn,
+    recordOutputsOn,
+    raw: preview(telemetryRaw, 200),
+  };
+}
+
+function hasUserInputInPrompt(snippet, promptBindings) {
+  const promptText = ["system", "prompt", "messages"]
+    .map((key) => extractProperty(snippet, key))
+    .filter(Boolean)
+    .join(" ");
+  if (/\$\{|\.content|user\.|input\.|message\.|req\.|body\./i.test(promptText)) return true;
+  for (const ref of promptReferences(promptText)) {
+    const resolved = resolvePromptText(ref, promptBindings);
+    if (/\$\{|user|input|message/i.test(resolved)) return true;
+  }
+  return /\$\{/.test(snippet);
+}
+
+const modelCatalogMap = new Map();
+
+function registerModelUsage(model, file, line, chainType, agentId) {
+  const modelKey = preview(model, 160);
+  if (!modelKey || modelKey === "No model property detected" || modelKey === "Agent loop") return;
+  const relative = rel(file);
+  if (!modelCatalogMap.has(modelKey)) {
+    modelCatalogMap.set(modelKey, {
+      model: modelKey,
+      usages: 0,
+      files: [],
+      agents: new Set(),
+      chainTypes: new Set(),
+    });
+  }
+  const entry = modelCatalogMap.get(modelKey);
+  entry.usages += 1;
+  entry.files.push({ file: relative, line, chainType });
+  entry.agents.add(agentId);
+  entry.chainTypes.add(chainType);
+}
+
+function finalizeModelCatalog() {
+  records.modelCatalog = [...modelCatalogMap.values()].map((entry) => ({
+    model: entry.model,
+    usages: entry.usages,
+    files: entry.files.slice(0, 24),
+    fileCount: new Set(entry.files.map((f) => f.file)).size,
+    agents: [...entry.agents],
+    chainTypes: [...entry.chainTypes],
+  }));
+  const scattered = records.modelCatalog.filter((entry) => entry.fileCount >= 3);
+  for (const entry of scattered) {
+    for (const usage of entry.files.slice(0, 1)) {
+      pushRisk(
+        "scattered-models",
+        "medium",
+        path.join(root, usage.file),
+        usage.line,
+        `Model ${entry.model} is hardcoded in ${entry.fileCount} files. Centralize model selection for easier upgrades.`,
+        entry.model,
+        "",
+        "",
+        { agentName: entry.agents[0] || "agent" },
+      );
+    }
+  }
+}
+
+function agentNameForId(agentId) {
+  const agent = agentMap.get(agentId);
+  return agent ? agent.name : agentId;
+}
+
+function analyzeLoopRisks(snippet, file, line, chain, toolsInChain = []) {
+  const loop = parseLoopConfig(snippet);
+  chain.loop = loop;
+  const ctx = {
+    agentId: chain.agentId,
+    agentName: agentNameForId(chain.agentId),
+    chainType: chain.type,
+    toolName: toolsInChain[0] || "myTool",
+  };
+  if (loop.isUnbounded) {
+    pushRisk(
+      "unbounded-loop",
+      "high",
+      file,
+      line,
+      `${chain.type} uses isLoopFinished() without stepCountIs or hasToolCall bounds — unbounded loop / cost risk.`,
+      loop.stopWhen || snippet,
+      chain.id,
+      chain.agentId,
+      ctx,
+    );
+  }
+  if (loop.toolChoiceRequired) {
+    const hasDoneTool = toolsInChain.some((name) => /^done$/i.test(name) || /done/i.test(name));
+    if (!hasDoneTool) {
+      pushRisk(
+        "required-tool-without-done",
+        "medium",
+        file,
+        line,
+        `${chain.type} sets toolChoice: 'required' but no terminating done tool was detected.`,
+        loop.toolChoice,
+        chain.id,
+        chain.agentId,
+        ctx,
+      );
+    }
+  }
+}
+
+function analyzeTelemetryRisks(snippet, file, line, chain, promptBindings) {
+  const telemetry = parseTelemetryConfig(snippet);
+  chain.telemetry = telemetry;
+  const ctx = {
+    agentId: chain.agentId,
+    agentName: agentNameForId(chain.agentId),
+    chainType: chain.type,
+    functionId: `${safeFunctionId(agentNameForId(chain.agentId))}_${slug(chain.type)}`,
+  };
+  const hasTrace = telemetry.isEnabled || hasTraceEvidence(snippet) || hasTraceEvidence(read(file));
+  chain.hasTrace = hasTrace;
+  if (!hasTrace) {
+    pushRisk("missing-trace", "high", file, line, `${chain.type} chain lacks trace ID, structured logging, or AI telemetry evidence.`, snippet, chain.id, chain.agentId, ctx);
+    return;
+  }
+  if (telemetry.hasTelemetry && telemetry.isEnabled && !telemetry.hasFunctionId) {
+    pushRisk(
+      "telemetry-without-function-id",
+      "medium",
+      file,
+      line,
+      `${chain.type} enables experimental_telemetry but omits functionId — traces won't group by task.`,
+      telemetry.raw,
+      chain.id,
+      chain.agentId,
+      ctx,
+    );
+  }
+  if (telemetry.isEnabled && (telemetry.recordInputsOn || telemetry.recordOutputsOn) && hasUserInputInPrompt(snippet, promptBindings)) {
+    pushRisk(
+      "telemetry-records-pii",
+      "medium",
+      file,
+      line,
+      `${chain.type} records inputs/outputs while prompts appear to include user content — disable recordInputs/recordOutputs for PII.`,
+      telemetry.raw,
+      chain.id,
+      chain.agentId,
+      ctx,
+    );
+  }
 }
 function id(prefix, file, line, extra = "") {
   return `${prefix}:${rel(file)}:${line}${extra ? `:${extra}` : ""}`;
@@ -494,6 +772,21 @@ function resolvePromptText(value, bindings) {
   return cleanMultiline(raw);
 }
 
+const promptLikeKeys = ["system", "prompt", "messages", "instructions"];
+
+function findPromptForValue(relative, kind, value, line, bindings) {
+  const resolved = capText(resolvePromptText(value, bindings) || value, 8000);
+  const evidence = preview(value, 240);
+  const candidates = records.prompts.filter(
+    (prompt) => prompt.file === relative && prompt.kind === kind && Math.abs(prompt.line - line) <= 100,
+  );
+  return (
+    candidates.find((prompt) => prompt.text === resolved || prompt.preview === preview(resolved, 180) || prompt.evidence === evidence) ||
+    candidates.find((prompt) => prompt.text && resolved && (prompt.text.includes(resolved) || resolved.includes(prompt.text))) ||
+    null
+  );
+}
+
 function pushPromptRecord({ file, relative, text, index, agent, kind, value, inline, valueType, name = "" }) {
   const line = lineOf(text, index);
   const literalBindings = collectPromptBindings(text);
@@ -599,7 +892,14 @@ function schemaSummary(snippet) {
   return keys.size ? [...keys].slice(0, 12).join(", ") : preview(schema, 180);
 }
 
-function pushRisk(kind, severity, file, line, message, evidence, targetId = "", agentId = "") {
+function pushRisk(kind, severity, file, line, message, evidence, targetId = "", agentId = "", fixContext = {}) {
+  const fixSnippet = buildFixSnippet(kind, {
+    agentId,
+    agentName: fixContext.agentName || agentNameForId(agentId),
+    chainType: fixContext.chainType || "",
+    toolName: fixContext.toolName || "",
+    functionId: fixContext.functionId || "",
+  });
   const risk = {
     id: id("risk", file, line, `${kind}:${records.risks.length + 1}`),
     kind,
@@ -609,7 +909,8 @@ function pushRisk(kind, severity, file, line, message, evidence, targetId = "", 
     message,
     evidence: preview(evidence, 220),
     evidenceFull: capText(evidence, 1200),
-    fix: riskFixHint(kind),
+    fix: fixSnippet,
+    fixSnippet,
     targetId,
     agentId,
   };
@@ -657,6 +958,7 @@ function describeAgent(agent, counts) {
   return `Static scan inference: ${agent.name} is detected from ${sourceText}. It ${actions.join(", ")}.`;
 }
 
+records.aiSdk = readAiSdkVersion(root);
 const files = walk(root);
 
 for (const file of files) {
@@ -680,6 +982,8 @@ for (const file of files) {
       if (pattern.regex.test(text)) aiPatterns.push(pattern.label);
     }
     if (/\bToolLoopAgent\b/.test(text)) aiPatterns.push("ToolLoopAgent");
+    if (/\bExperimental_Agent\b/.test(text)) aiPatterns.push("Experimental_Agent");
+    if (/\bexperimental_createMCPClient\b/.test(text)) aiPatterns.push("MCP");
     records.routes.push({
       id: id("route", file, 1),
       file: relative,
@@ -714,7 +1018,7 @@ for (const file of files) {
     });
   });
 
-  eachMatch(text, /(?:^|[^.\w$])\b(system|prompt|messages)\s*:\s*(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\[[\s\S]{0,700}?\]|[A-Za-z_$][\w$.[\]]*)/g, (m) => {
+  eachMatch(text, /(?:^|[^.\w$])\b(system|prompt|messages|instructions)\s*:\s*(`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\[[\s\S]{0,700}?\]|[A-Za-z_$][\w$.[\]]*)/g, (m) => {
     const key = m[1] || "";
     const value = m[2] || "";
     const lineTail = text.slice(m.index, text.indexOf("\n", m.index) === -1 ? text.length : text.indexOf("\n", m.index));
@@ -726,7 +1030,7 @@ for (const file of files) {
       id: id("prompt", file, promptLine, `${key}:${records.prompts.length + 1}`),
       file: relative,
       line: promptLine,
-      agentId: registerAgent(fileAgent, file, promptLine, "prompt"),
+      agentId: registerAgent(inferAgent(file, text, m.index, key), file, promptLine, "prompt"),
       kind: key,
       inline,
       valueType: inline ? "inline literal" : "reference",
@@ -791,6 +1095,7 @@ for (const file of files) {
     const line = lineOf(text, m.index);
     const name = inferAssignedName(text, m.index, `tool_${records.tools.length + 1}`);
     const sideEffect = hasSideEffect(snippet) || hasSideEffect(extractProperty(snippet, "execute"));
+    const needsApproval = /\bneedsApproval\s*:\s*true\b/.test(snippet);
     const fields = schemaFields(snippet);
     const tool = {
       id: id("tool", file, line, name),
@@ -804,39 +1109,94 @@ for (const file of files) {
       schemaFields: fields,
       hasInputSchema: /\binputSchema\s*:/.test(snippet),
       hasExecute: /\bexecute\s*:/.test(snippet),
+      needsApproval,
       sideEffect,
       evidence: preview(snippet, 600),
       snippet: snippetOf(text, line),
     };
     records.tools.push(tool);
-    if (sideEffect) {
+    const toolCtx = { toolName: name, agentName: agentNameForId(tool.agentId) };
+    if (sideEffect && !needsApproval) {
       pushRisk(
-        "side-effect-tool",
+        "side-effect-without-approval",
         "high",
         file,
         line,
-        `Tool ${name} appears to perform side effects and should have trace IDs, authorization checks, and tests.`,
+        `Tool ${name} performs side effects without needsApproval — add human-in-the-loop before destructive actions.`,
         tool.evidence,
         tool.id,
         tool.agentId,
+        toolCtx,
+      );
+    } else if (sideEffect) {
+      pushRisk(
+        "side-effect-tool",
+        "medium",
+        file,
+        line,
+        `Tool ${name} performs side effects — ensure authorization checks, trace IDs, and integration tests.`,
+        tool.evidence,
+        tool.id,
+        tool.agentId,
+        toolCtx,
       );
     }
+  });
+
+  eachMatch(text, /\bdynamicTool\s*\(/g, (m) => {
+    const line = lineOf(text, m.index);
+    records.tools.push({
+      id: id("tool", file, line, `dynamic_${records.tools.length + 1}`),
+      file: relative,
+      line,
+      agentId: registerAgent(fileAgent, file, line, "tool"),
+      name: inferAssignedName(text, m.index, "dynamicTool"),
+      description: "dynamicTool (runtime-defined schema)",
+      descriptionFull: "",
+      schema: "dynamic",
+      schemaFields: [],
+      hasInputSchema: false,
+      hasExecute: true,
+      needsApproval: /\bneedsApproval\s*:\s*true\b/.test(extractBalancedCall(text, m.index)),
+      sideEffect: hasSideEffect(extractBalancedCall(text, m.index)),
+      evidence: preview(extractBalancedCall(text, m.index), 300),
+      snippet: snippetOf(text, line),
+      dynamic: true,
+    });
+  });
+
+  eachMatch(text, /\bexperimental_createMCPClient\s*\(/g, (m) => {
+    const line = lineOf(text, m.index);
+    records.mcpClients.push({
+      id: id("mcp", file, line),
+      file: relative,
+      line,
+      agentId: registerAgent(fileAgent, file, line, "mcp"),
+      evidence: preview(extractBalancedCall(text, m.index), 200),
+    });
+  });
+
+  eachMatch(text, /\bconvertToModelMessages\s*\(/g, (m) => {
+    const line = lineOf(text, m.index);
+    if (!records.routes.some((r) => r.file === relative)) return;
+    const route = records.routes.find((r) => r.file === relative);
+    if (route) route.hasMessagePersistence = true;
   });
 
   function pushModelCall(match, type) {
     const snippet = extractBalancedCall(text, match.index);
     const line = lineOf(text, match.index);
     const model = extractProperty(snippet, "model") || "No model property detected";
+    const outputMode = extractProperty(snippet, "output") || extractProperty(snippet, "experimental_output") || "";
     const promptRefs = [];
     const promptRefIds = [];
-    for (const key of ["system", "prompt", "messages"]) {
+    for (const key of promptLikeKeys) {
       const value = extractProperty(snippet, key);
       if (value) {
-        promptRefs.push(`${key}: ${preview(value, 90)}`);
-        const match = records.prompts.find(
-          (p) => p.file === relative && p.kind === key && (p.text === capText(value, 8000) || p.preview === preview(value, 180)),
-        );
-        if (match) promptRefIds.push(match.id);
+        const resolvedPrompt = resolvePromptText(value, promptBindings) || value;
+        promptRefs.push(`${key}: ${preview(resolvedPrompt, 120)}`);
+        const promptMatch = findPromptForValue(relative, key, value, line, promptBindings);
+        if (promptMatch) promptRefIds.push(promptMatch.id);
       }
     }
     const toolBlock = extractProperty(snippet, "tools");
@@ -846,11 +1206,12 @@ for (const file of files) {
         if (!["description", "parameters", "inputSchema", "execute"].includes(tm[1])) tools.push(tm[1]);
       });
     }
+    const agentId = registerAgent(inferAgent(file, text, match.index, type), file, line, "chain");
     const chain = {
       id: id("chain", file, line, slug(type)),
       file: relative,
       line,
-      agentId: registerAgent(inferAgent(file, text, match.index, type), file, line, "chain"),
+      agentId,
       type,
       model: preview(model, 120),
       modelFull: capText(model, 500),
@@ -859,17 +1220,19 @@ for (const file of files) {
       tools: [...new Set(tools)],
       toolIds: [],
       hasEval: hasEvalEvidence(text, file),
-      hasTrace: hasTraceEvidence(snippet) || hasTraceEvidence(text),
+      hasTrace: false,
+      structuredOutput: !!outputMode.trim(),
       evidence: preview(snippet, 260),
       snippet: snippetOf(text, line),
     };
+    registerModelUsage(model, file, line, type, agentId);
+    analyzeLoopRisks(snippet, file, line, chain, chain.tools);
+    analyzeTelemetryRisks(snippet, file, line, chain, promptBindings);
     records.modelCalls.push(chain);
     records.chains.push(chain);
+    const evalCtx = { agentName: agentNameForId(agentId), chainType: type };
     if (!chain.hasEval) {
-      pushRisk("missing-eval", "medium", file, line, `${type} chain lacks nearby eval or test evidence.`, snippet, chain.id, chain.agentId);
-    }
-    if (!chain.hasTrace) {
-      pushRisk("missing-trace", "high", file, line, `${type} chain lacks trace ID, structured logging, or AI telemetry evidence.`, snippet, chain.id, chain.agentId);
+      pushRisk("missing-eval", "medium", file, line, `${type} chain lacks nearby eval or test evidence.`, snippet, chain.id, chain.agentId, evalCtx);
     }
   }
 
@@ -879,32 +1242,102 @@ for (const file of files) {
     });
   }
 
-  eachMatch(text, /\bToolLoopAgent\b/g, (m) => {
+  eachMatch(text, /\bnew\s+ToolLoopAgent\s*\(/g, (m) => {
+    const snippet = extractBalancedCall(text, m.index);
     const line = lineOf(text, m.index);
-    const snippet = text.slice(Math.max(0, m.index - 220), Math.min(text.length, m.index + 700));
+    const model = extractProperty(snippet, "model") || "Agent loop";
+    const instructions = extractProperty(snippet, "instructions") || extractProperty(snippet, "system") || "";
+    const instructionKind = extractProperty(snippet, "instructions") ? "instructions" : "system";
+    const instructionPrompt = instructions ? findPromptForValue(relative, instructionKind, instructions, line, promptBindings) : null;
     const loopTools = records.tools.filter((tool) => tool.file === relative);
+    const agentId = registerAgent(inferAgent(file, text, m.index, "ToolLoopAgent"), file, line, "chain");
     const chain = {
       id: id("chain", file, line, "ToolLoopAgent"),
       file: relative,
       line,
-      agentId: registerAgent(inferAgent(file, text, m.index, "ToolLoopAgent"), file, line, "chain"),
+      agentId,
+      type: "ToolLoopAgent",
+      model: preview(model, 120),
+      modelFull: capText(model, 500),
+      prompts: instructions ? [`${instructionKind}: ${preview(resolvePromptText(instructions, promptBindings) || instructions, 120)}`] : [],
+      promptIds: instructionPrompt ? [instructionPrompt.id] : [],
+      tools: loopTools.map((tool) => tool.name),
+      toolIds: loopTools.map((tool) => tool.id),
+      hasEval: hasEvalEvidence(text, file),
+      hasTrace: false,
+      evidence: preview(snippet, 260),
+      snippet: snippetOf(text, line),
+    };
+    registerModelUsage(model, file, line, "ToolLoopAgent", agentId);
+    analyzeLoopRisks(snippet, file, line, chain, chain.tools);
+    analyzeTelemetryRisks(snippet, file, line, chain, promptBindings);
+    records.chains.push(chain);
+    const evalCtx = { agentName: agentNameForId(agentId), chainType: "ToolLoopAgent" };
+    if (!chain.hasEval) pushRisk("missing-eval", "medium", file, line, "ToolLoopAgent chain lacks nearby eval or test evidence.", snippet, chain.id, chain.agentId, evalCtx);
+  });
+
+  eachMatch(text, /\bnew\s+Experimental_Agent\s*\(/g, (m) => {
+    const snippet = extractBalancedCall(text, m.index);
+    const line = lineOf(text, m.index);
+    const model = extractProperty(snippet, "model") || "Experimental_Agent";
+    const agentId = registerAgent(inferAgent(file, text, m.index, "Experimental_Agent"), file, line, "chain");
+    const loopTools = records.tools.filter((tool) => tool.file === relative);
+    const chain = {
+      id: id("chain", file, line, "Experimental_Agent"),
+      file: relative,
+      line,
+      agentId,
+      type: "Experimental_Agent",
+      model: preview(model, 120),
+      modelFull: capText(model, 500),
+      prompts: [],
+      promptIds: [],
+      tools: loopTools.map((tool) => tool.name),
+      toolIds: loopTools.map((tool) => tool.id),
+      hasEval: hasEvalEvidence(text, file),
+      hasTrace: false,
+      evidence: preview(snippet, 260),
+      snippet: snippetOf(text, line),
+    };
+    records.experimentalAgents.push({ id: chain.id, file: relative, line, agentId });
+    registerModelUsage(model, file, line, "Experimental_Agent", agentId);
+    analyzeLoopRisks(snippet, file, line, chain, chain.tools);
+    analyzeTelemetryRisks(snippet, file, line, chain, promptBindings);
+    records.chains.push(chain);
+  });
+
+  eachMatch(text, /\bToolLoopAgent\b/g, (m) => {
+    if (/\bnew\s+ToolLoopAgent\s*\(/.test(text.slice(Math.max(0, m.index - 8), m.index + 20))) return;
+    const lineStart = text.lastIndexOf("\n", m.index) + 1;
+    const lineEnd = text.indexOf("\n", m.index);
+    const lineText = text.slice(lineStart, lineEnd === -1 ? text.length : lineEnd);
+    if (/^\s*import\b/.test(lineText)) return;
+    const line = lineOf(text, m.index);
+    if (records.chains.some((c) => c.file === relative && c.line === line && c.type === "ToolLoopAgent")) return;
+    const snippet = text.slice(Math.max(0, m.index - 220), Math.min(text.length, m.index + 700));
+    const agentId = registerAgent(inferAgent(file, text, m.index, "ToolLoopAgent"), file, line, "chain");
+    const chain = {
+      id: id("chain", file, line, "ToolLoopAgent-ref"),
+      file: relative,
+      line,
+      agentId,
       type: "ToolLoopAgent",
       model: "Agent loop",
       modelFull: "Agent loop",
       prompts: [],
       promptIds: [],
-      tools: loopTools.map((tool) => tool.name),
-      toolIds: loopTools.map((tool) => tool.id),
+      tools: records.tools.filter((tool) => tool.file === relative).map((tool) => tool.name),
+      toolIds: [],
       hasEval: hasEvalEvidence(text, file),
       hasTrace: hasTraceEvidence(text),
       evidence: preview(snippet, 260),
       snippet: snippetOf(text, line),
     };
     records.chains.push(chain);
-    if (!chain.hasEval) pushRisk("missing-eval", "medium", file, line, "ToolLoopAgent chain lacks nearby eval or test evidence.", snippet, chain.id, chain.agentId);
-    if (!chain.hasTrace) pushRisk("missing-trace", "high", file, line, "ToolLoopAgent chain lacks trace ID, structured logging, or telemetry evidence.", snippet, chain.id, chain.agentId);
   });
 }
+
+finalizeModelCatalog();
 
 for (const route of records.routes) {
   if (route.aiPatterns.length && !route.hasTrace) {
@@ -927,11 +1360,27 @@ function postProcessCrossLinks() {
     toolIndex.set(`${tool.file}::${tool.name}`, tool.id);
     toolIndex.set(`${tool.agentId}::${tool.name}`, tool.id);
   }
+  const agentHasPrimaryFlow = (agentId) =>
+    records.chains.some((item) => item.agentId === agentId) ||
+    records.routes.some((item) => item.agentId === agentId) ||
+    records.uiEntrypoints.some((item) => item.agentId === agentId) ||
+    records.prompts.some((item) => item.agentId === agentId);
   for (const chain of records.chains) {
     if (!chain.toolIds || !chain.toolIds.filter(Boolean).length) {
       chain.toolIds = (chain.tools || []).map(
         (name) => toolIndex.get(`${chain.file}::${name}`) || toolIndex.get(`${chain.agentId}::${name}`) || "",
       );
+    }
+    for (const toolId of chain.toolIds || []) {
+      const tool = records.tools.find((item) => item.id === toolId);
+      if (!tool || tool.agentId === chain.agentId || tool.file !== chain.file || agentHasPrimaryFlow(tool.agentId)) continue;
+      const previousAgentId = tool.agentId;
+      tool.agentId = chain.agentId;
+      for (const risk of records.risks) {
+        if (risk.targetId === tool.id || (risk.agentId === previousAgentId && risk.file === tool.file && Math.abs(risk.line - tool.line) <= 2)) {
+          risk.agentId = chain.agentId;
+        }
+      }
     }
     if (!chain.promptIds) chain.promptIds = [];
   }
@@ -973,7 +1422,7 @@ function matchRouteForEntry(entry, routes) {
 }
 
 function promptStepTitle(prompt) {
-  const kind = prompt.kind === "system" ? "System instructions are added" : prompt.kind === "messages" ? "Conversation context is added" : "User instructions are added";
+  const kind = prompt.kind === "system" || prompt.kind === "instructions" ? "System instructions are added" : prompt.kind === "messages" ? "Conversation context is added" : "User instructions are added";
   const name = clean(prompt.name || "");
   if (name && name.toLowerCase() !== clean(prompt.kind).toLowerCase()) return `${kind} · ${name}`;
   if (prompt.valueType === "reference") return `${kind} from a shared reference`;
@@ -1042,7 +1491,7 @@ function buildAgentFlow(agentId) {
 
   for (const chain of chains) {
     const chainPrompts = (chain.promptIds || [])
-      .map((promptId) => prompts.find((item) => item.id === promptId))
+      .map((promptId) => records.prompts.find((item) => item.id === promptId))
       .filter(Boolean)
       .sort((a, b) => a.line - b.line);
     for (const prompt of chainPrompts) {
@@ -1081,7 +1530,7 @@ function buildAgentFlow(agentId) {
     });
 
     const chainTools = (chain.toolIds || [])
-      .map((toolId) => tools.find((tool) => tool.id === toolId))
+      .map((toolId) => records.tools.find((tool) => tool.id === toolId))
       .filter(Boolean);
     const readTools = chainTools.filter((tool) => !tool.sideEffect);
     const effectTools = chainTools.filter((tool) => tool.sideEffect);
@@ -1324,7 +1773,8 @@ function removeLegacyOutputs() {
 }
 
 function write(name, body) {
-  if (legacyOutputFiles.includes(name) || name.endsWith(".md")) return;
+  if (legacyOutputFiles.includes(name)) return;
+  if (name.endsWith(".md") && name !== "agent-map.md") return;
   fs.writeFileSync(path.join(outDir, name), body);
 }
 
@@ -1356,12 +1806,135 @@ function renderList(items, empty, render) {
   return `<div class="list">${items.map(render).join("")}</div>`;
 }
 
-function tracePayload(generatedAt) {
+function riskSignature(risk) {
+  return `${risk.kind}|${risk.file}|${risk.line}|${risk.message}`;
+}
+
+function computeScanDiff(previousTrace) {
+  if (!previousTrace || !Array.isArray(previousTrace.risks)) {
+    return { hasPrevious: false, newRisks: [], fixedRisks: [], unchanged: records.risks.length };
+  }
+  const prevBySig = new Map(previousTrace.risks.map((r) => [riskSignature(r), r]));
+  const currBySig = new Map(records.risks.map((r) => [riskSignature(r), r]));
+  const newRisks = records.risks.filter((r) => !prevBySig.has(riskSignature(r)));
+  const fixedRisks = previousTrace.risks.filter((r) => !currBySig.has(riskSignature(r)));
+  return {
+    hasPrevious: true,
+    previousAt: previousTrace.generatedAt || "",
+    newRisks,
+    fixedRisks,
+    unchanged: records.risks.length - newRisks.length,
+    newCount: newRisks.length,
+    fixedCount: fixedRisks.length,
+  };
+}
+
+function buildAgentMapMarkdown(trace) {
+  const lines = [
+    "# Agent Map",
+    "",
+    `Generated ${trace.generatedAt} from \`${trace.root}\`.`,
+    "",
+    `AI SDK: **${trace.aiSdk?.label || "unknown"}**`,
+    "",
+  ];
+  for (const agent of trace.agents || []) {
+    lines.push(`## ${agent.name} (\`${agent.id}\`)`);
+    lines.push("");
+    lines.push(agent.description || "");
+    lines.push("");
+    const agentChains = (trace.chains || []).filter((c) => c.agentId === agent.id);
+    const agentTools = (trace.tools || []).filter((t) => t.agentId === agent.id);
+    const agentRoutes = (trace.routes || []).filter((r) => r.agentId === agent.id);
+    const agentRisks = (trace.risks || []).filter((r) => r.agentId === agent.id);
+    if (agentRoutes.length) {
+      lines.push("### Routes");
+      for (const route of agentRoutes) {
+        lines.push(`- \`${route.file}\` (${(route.methods || []).join("/") || "handler"}) — ${(route.aiPatterns || []).join(", ") || "no AI patterns"}`);
+      }
+      lines.push("");
+    }
+    if (agentChains.length) {
+      lines.push("### Model calls");
+      for (const chain of agentChains) {
+        const loop = chain.loop?.stepCount ? ` · stop@${chain.loop.stepCount}` : chain.loop?.hasStopWhen ? " · bounded" : "";
+        const tel = chain.telemetry?.isEnabled ? " · telemetry on" : "";
+        lines.push(`- \`${chain.file}:${chain.line}\` **${chain.type}** — model: ${chain.model}${loop}${tel}`);
+        if (chain.tools?.length) lines.push(`  - tools: ${chain.tools.join(", ")}`);
+      }
+      lines.push("");
+    }
+    if (agentTools.length) {
+      lines.push("### Tools");
+      for (const tool of agentTools) {
+        const flags = [tool.sideEffect ? "side-effect" : "read-only", tool.needsApproval ? "needsApproval" : null].filter(Boolean).join(", ");
+        lines.push(`- \`${tool.name}\` at \`${tool.file}:${tool.line}\` (${flags}) — ${tool.schema}`);
+      }
+      lines.push("");
+    }
+    if (agentRisks.length) {
+      lines.push("### Risks");
+      for (const risk of agentRisks) {
+        lines.push(`- [${risk.severity}] ${risk.message} (\`${risk.file}:${risk.line}\`)`);
+      }
+      lines.push("");
+    }
+    const flow = trace.flows?.[agent.id] || [];
+    if (flow.length) {
+      lines.push("### Flow");
+      lines.push("```mermaid");
+      lines.push("flowchart TD");
+      flow.forEach((step, index) => {
+        const nodeId = `S${index}`;
+        const label = (step.title || step.phase).replace(/"/g, "'");
+        lines.push(`  ${nodeId}["${label}"]`);
+        if (index > 0) lines.push(`  S${index - 1} --> ${nodeId}`);
+      });
+      lines.push("```");
+      lines.push("");
+    }
+  }
+  if (trace.modelCatalog?.length) {
+    lines.push("## Model catalog");
+    for (const entry of trace.modelCatalog) {
+      lines.push(`- **${entry.model}** — ${entry.usages} use(s) across ${entry.fileCount} file(s)`);
+    }
+    lines.push("");
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function buildAgentContextMarkdown(agent, trace) {
+  const chunks = [
+    `# ${agent.name} context`,
+    "",
+    agent.description || "",
+    "",
+    "## Routes",
+    ...((trace.routes || []).filter((r) => r.agentId === agent.id).map((r) => `- ${r.file} (${(r.methods || []).join("/")})`)),
+    "",
+    "## Chains",
+    ...((trace.chains || []).filter((c) => c.agentId === agent.id).map((c) => `- ${c.type} at ${c.file}:${c.line} model=${c.model}`)),
+    "",
+    "## Tools",
+    ...((trace.tools || []).filter((t) => t.agentId === agent.id).map((t) => `- ${t.name}: ${t.description} (${t.sideEffect ? "side-effect" : "read"})`)),
+    "",
+    "## Risks",
+    ...((trace.risks || []).filter((r) => r.agentId === agent.id).map((r) => `- [${r.severity}] ${r.message}`)),
+  ];
+  return chunks.filter((line) => line !== undefined).join("\n");
+}
+
+function tracePayload(generatedAt, scanDiff) {
+  const highRisks = records.risks.filter((r) => r.severity === "high").length;
+  const mediumRisks = records.risks.filter((r) => r.severity === "medium").length;
   return {
     generatedAt,
     root,
     scanner: "agent-observe-skill.sh",
     selection,
+    aiSdk: records.aiSdk,
+    scanDiff,
     summary: {
       agents: records.agents.length,
       prompts: records.prompts.length,
@@ -1370,10 +1943,17 @@ function tracePayload(generatedAt) {
       routes: records.routes.length,
       uiEntrypoints: records.uiEntrypoints.length,
       risks: records.risks.length,
+      highRisks,
+      mediumRisks,
+      mcpClients: records.mcpClients.length,
+      models: records.modelCatalog.length,
     },
     flows: buildAllFlows(),
     flowNote:
       "This is the likely product journey from user action to AI response. It is inferred from static code, so runtime tool order may differ.",
+    agentContexts: Object.fromEntries(
+      records.agents.map((agent) => [agent.id, buildAgentContextMarkdown(agent, { ...records, flows: buildAllFlows() })]),
+    ),
     ...records,
   };
 }
@@ -1382,7 +1962,12 @@ function renderSimpleHtmlReport(trace, report) {
   const json = JSON.stringify({ ...trace, markdownReport: report }).replace(/</g, "\\u003c");
   const selectionLabel = escapeHtml(trace.selection.label || "All detected agents");
   const generatedAt = escapeHtml(trace.generatedAt);
-  const clientScript = "// Embedded into renderSimpleHtmlReport — client-side only (no Node).\nconst PHASE_META = {\n  entry: { label: \"Start\", tone: \"info\" },\n  route: { label: \"Backend\", tone: \"info\" },\n  prompt: { label: \"Instructions\", tone: \"low\" },\n  model: { label: \"AI response\", tone: \"info\" },\n  tool: { label: \"Lookup\", tone: \"ok\" },\n  \"side-effect\": { label: \"Action\", tone: \"high\" },\n  output: { label: \"Answer\", tone: \"ok\" },\n  empty: { label: \"—\", tone: \"low\" },\n};\n\nconst state = {\n  agentId: (trace.agents || [])[0]?.id || \"\",\n  selectedId: \"\",\n  kind: \"\",\n  view: \"report\",\n};\n\nconst escapeHtml = (value) =>\n  String(value ?? \"\").replace(/[&<>\"']/g, (char) =>\n    ({ \"&\": \"&amp;\", \"<\": \"&lt;\", \">\": \"&gt;\", '\"': \"&quot;\", \"'\": \"&#39;\" })[char],\n  );\n\nconst byAgent = (items) => (items || []).filter((item) => item.agentId === state.agentId);\nconst currentAgent = () => (trace.agents || []).find((agent) => agent.id === state.agentId) || null;\n\nfunction promptTitle(item, fallback) {\n  if (!item) return fallback || \"Prompt\";\n  const kind = item.kind === \"system\" ? \"System instructions are added\" : item.kind === \"messages\" ? \"Conversation context is added\" : \"User instructions are added\";\n  const name = String(item.name || \"\").trim();\n  if (name && name.toLowerCase() !== String(item.kind || \"\").toLowerCase()) return kind + \" · \" + name;\n  if (item.valueType === \"reference\") return kind + \" from a shared reference\";\n  if (item.valueType === \"named constant\") return kind + \" from a named prompt\";\n  return kind;\n}\n\nfunction displayStepTitle(step) {\n  if (!step) return \"\";\n  return step.title || \"\";\n}\n\nfunction agentButtonClass(active) {\n  return [\n    \"rounded-lg border px-3 py-1.5 text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-gray-200 whitespace-nowrap\",\n    active\n      ? \"border-blue-600 text-blue-600 bg-blue-50\"\n      : \"border-gray-200 text-gray-700 bg-white hover:border-gray-300 hover:bg-gray-50\",\n  ].join(\" \");\n}\n\nfunction viewButtonClass(active) {\n  return [\n    \"rounded-md px-3 py-1.5 text-xs font-semibold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200\",\n    active ? \"bg-white text-blue-700 shadow-sm\" : \"text-gray-500 hover:text-gray-900\",\n  ].join(\" \");\n}\n\nfunction badge(text, tone) {\n  const tones = {\n    high: \"bg-red-50 text-red-700 border-red-200\",\n    medium: \"bg-amber-50 text-amber-800 border-amber-200\",\n    low: \"bg-gray-50 text-gray-600 border-gray-200\",\n    info: \"bg-blue-50 text-blue-700 border-blue-200\",\n    ok: \"bg-emerald-50 text-emerald-700 border-emerald-200\",\n  };\n  return (\n    '<span class=\"inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ' +\n    (tones[tone] || tones.low) +\n    '\">' +\n    escapeHtml(text) +\n    \"</span>\"\n  );\n}\n\nfunction flowStepsForAgent(agentId) {\n  if (trace.flows && trace.flows[agentId]) return trace.flows[agentId];\n  return [];\n}\n\nfunction findItem(kind, id) {\n  if (!kind || !id || id.endsWith(\":output\")) return null;\n  const key =\n    kind === \"entrypoints\"\n      ? \"uiEntrypoints\"\n      : kind === \"chains\"\n        ? \"chains\"\n        : kind === \"routes\"\n          ? \"routes\"\n          : kind === \"tools\"\n            ? \"tools\"\n            : kind === \"prompts\"\n              ? \"prompts\"\n              : kind;\n  return (trace[key] || []).find((item) => item.id === id) || null;\n}\n\nfunction phaseAccent(phase) {\n  const map = {\n    entry: \"bg-sky-500\",\n    route: \"bg-indigo-500\",\n    prompt: \"bg-violet-500\",\n    model: \"bg-blue-600\",\n    tool: \"bg-emerald-500\",\n    \"side-effect\": \"bg-rose-500\",\n    output: \"bg-gray-800\",\n    empty: \"bg-gray-300\",\n  };\n  return map[phase] || \"bg-gray-400\";\n}\n\nfunction flowCardClass(active, nested) {\n  return [\n    \"flow-card w-full text-left rounded-lg border transition-all\",\n    \"focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200 focus-visible:ring-offset-1\",\n    nested ? \"border-gray-200/90 bg-gray-50/80\" : \"border-gray-200 bg-white shadow-sm\",\n    active ? \"!border-blue-500 ring-2 ring-blue-100\" : \"hover:border-gray-300 hover:shadow\",\n  ].join(\" \");\n}\n\nfunction flowStepMarker(step, active) {\n  if (step.nested) {\n    return (\n      '<div class=\"mt-3 flex h-2 w-2 shrink-0 rounded-full ' +\n      (active ? \"bg-blue-600\" : \"bg-gray-300\") +\n      '\" aria-hidden=\"true\"></div>'\n    );\n  }\n  return (\n    '<div class=\"mt-2.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold tabular-nums ' +\n    (active ? \"bg-blue-600 text-white shadow-sm\" : \"border border-gray-300 bg-white text-gray-600\") +\n    '\">' +\n    escapeHtml(String(step.order)) +\n    \"</div>\"\n  );\n}\n\nfunction section(title, body) {\n  return (\n    '<div class=\"grid gap-2\"><h3 class=\"text-xs font-semibold uppercase tracking-wide text-gray-500\">' +\n    escapeHtml(title) +\n    '</h3><div class=\"text-[15px] text-gray-800\">' +\n    body +\n    \"</div></div>\"\n  );\n}\n\nfunction paragraph(text, tone) {\n  return '<p class=\"leading-relaxed ' + (tone || \"text-gray-800\") + '\">' + escapeHtml(text) + \"</p>\";\n}\n\nfunction codeValue(value) {\n  return '<code class=\"font-mono text-sm text-gray-700 break-words\">' + escapeHtml(value || \"—\") + \"</code>\";\n}\n\nfunction detailList(items) {\n  return (\n    '<dl class=\"grid gap-2 text-sm\">' +\n    items\n      .map(function (item) {\n        return (\n          '<div class=\"grid gap-1 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-3\">' +\n          '<dt class=\"text-xs font-semibold uppercase tracking-wide text-gray-400\">' +\n          escapeHtml(item[0]) +\n          \"</dt>\" +\n          '<dd class=\"min-w-0 text-gray-800\">' +\n          item[1] +\n          \"</dd>\" +\n          \"</div>\"\n        );\n      })\n      .join(\"\") +\n    \"</dl>\"\n  );\n}\n\nfunction preBlock(text) {\n  return (\n    '<pre class=\"mt-2 max-h-64 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-gray-800 whitespace-pre-wrap break-words\">' +\n    escapeHtml(text || \"\") +\n    \"</pre>\"\n  );\n}\n\nfunction editorHref(item) {\n  const root = (trace.root || \"\").replace(/\\\\/g, \"/\");\n  const file = (item.file || \"\").replace(/\\\\/g, \"/\");\n  return \"vscode://file/\" + root + \"/\" + file + \":\" + item.line;\n}\n\nfunction locBar(item) {\n  const loc = item.file + \":\" + item.line;\n  return (\n    '<div class=\"flex flex-wrap items-center gap-2 text-sm\">' +\n    '<code class=\"font-mono text-xs text-gray-600\">' +\n    escapeHtml(loc) +\n    \"</code>\" +\n    '<a class=\"text-xs font-medium text-blue-600 hover:underline\" href=\"' +\n    escapeHtml(editorHref(item)) +\n    '\">Open in editor</a>' +\n    '<button type=\"button\" class=\"copy-path text-xs font-medium text-gray-500 hover:text-gray-900\" data-copy=\"' +\n    escapeHtml(loc) +\n    '\">Copy path</button>' +\n    \"</div>\"\n  );\n}\n\nfunction renderOutputDetail(step, chain) {\n  return (\n    '<div class=\"grid gap-4\">' +\n    '<h2 class=\"text-lg font-semibold text-gray-900\">' +\n    escapeHtml(step.title) +\n    \"</h2>\" +\n    section(\"What this means\", paragraph(step.note || \"The product shows the AI response to the user.\")) +\n    (chain\n      ? section(\n          \"Code details\",\n          detailList([\n            [\"Output\", codeValue(step.subtitle)],\n            [\"Model call\", codeValue(chain.type || \"model call\")],\n          ]),\n        ) +\n        locBar(chain) +\n        '<p class=\"text-xs text-gray-400 mt-2\">In the UI, streamed tokens appear in the chat component; non-stream responses render as a single message or JSON payload.</p>'\n      : \"\") +\n    \"</div>\"\n  );\n}\n\nfunction productMeaning(kind, item, step) {\n  if (kind === \"entrypoints\") {\n    return \"This is the product moment where a user starts the AI experience, usually by sending a message or prompt.\";\n  }\n  if (kind === \"routes\") {\n    return \"This backend endpoint receives the user's request and prepares the AI work.\";\n  }\n  if (kind === \"prompts\") {\n    return \"These instructions shape how the AI should behave before it answers the user.\";\n  }\n  if (kind === \"chains\") {\n    return \"This is where the app asks an AI model to generate the next response.\";\n  }\n  if (kind === \"tools\" && item && item.sideEffect) {\n    return \"The AI can call this helper to change something outside the chat, such as a database, payment, email, or another service.\";\n  }\n  if (kind === \"tools\") {\n    return \"The AI can call this helper to look up information before it answers.\";\n  }\n  return step && step.note ? step.note : \"This is one step in the AI flow.\";\n}\n\nfunction renderDetail(item, kind, step) {\n  if (step && step.phase === \"output\") {\n    const chainId = step.id.replace(/:output$/, \"\");\n    const chain = (trace.chains || []).find((c) => c.id === chainId);\n    return renderOutputDetail(step, chain);\n  }\n  if (!item) {\n    if (step && step.phase === \"empty\") {\n      return '<p class=\"text-[15px] text-gray-500\">' + escapeHtml(step.subtitle) + \"</p>\";\n    }\n    return '<p class=\"text-[15px] text-gray-500\">Select a step in the flow to inspect it.</p>';\n  }\n\n  const badges = [];\n  if (kind === \"tools\" && item.sideEffect) badges.push(badge(\"side effect\", \"high\"));\n  if (kind === \"prompts\" && item.inline) badges.push(badge(\"inline\", \"medium\"));\n  if (kind === \"chains\") {\n    if (!item.hasEval) badges.push(badge(\"no eval\", \"medium\"));\n    if (!item.hasTrace) badges.push(badge(\"no trace\", \"high\"));\n    else badges.push(badge(\"trace ok\", \"ok\"));\n  }\n\n  let body = \"\";\n  if (kind === \"prompts\") {\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      section(\"Prompt text\", preBlock(item.text || item.preview || \"No prompt text resolved\")) +\n      section(\n        \"Code details\",\n        detailList([\n          [\"Prompt type\", codeValue(item.kind)],\n          [\"Value source\", codeValue(item.valueType)],\n        ]),\n      );\n  } else if (kind === \"tools\") {\n    const schemaRows = (item.schemaFields || [])\n      .map(\n        (f) =>\n          '<tr class=\"border-t border-gray-100\"><td class=\"py-2 pr-4 font-mono text-xs\">' +\n          escapeHtml(f.name) +\n          '</td><td class=\"py-2 font-mono text-xs text-gray-600\">' +\n          escapeHtml(f.type) +\n          \"</td></tr>\",\n      )\n      .join(\"\");\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      (item.sideEffect\n        ? '<p class=\"rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800\">This can change real product state. Review permissions, logging, and tests before trusting model-triggered calls.</p>'\n        : \"\") +\n      section(\n        \"Code details\",\n        detailList([\n          [\"Tool name\", codeValue(item.name)],\n          [\"Description\", escapeHtml(item.descriptionFull || item.description || \"—\")],\n          [\"Can change state\", codeValue(item.sideEffect ? \"yes\" : \"no\")],\n        ]),\n      ) +\n      section(\n        \"Input data this tool expects\",\n        schemaRows\n          ? '<table class=\"w-full text-left\"><thead><tr><th class=\"pb-2 text-xs text-gray-500\">Field</th><th class=\"pb-2 text-xs text-gray-500\">Type</th></tr></thead><tbody>' +\n            schemaRows +\n            \"</tbody></table>\"\n          : '<p class=\"text-gray-500 text-sm\">' + escapeHtml(item.schema || \"No schema\") + \"</p>\",\n      );\n  } else if (kind === \"chains\") {\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      section(\n        \"Code details\",\n        detailList([\n          [\"Model\", codeValue(item.modelFull || item.model)],\n          [\"Prompt inputs\", escapeHtml((item.prompts || []).join(\"; \") || \"—\")],\n          [\"Tools available\", escapeHtml((item.tools || []).join(\", \") || \"—\")],\n        ]),\n      );\n  } else if (kind === \"routes\") {\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      section(\n        \"Code details\",\n        detailList([\n          [\"HTTP methods\", codeValue((item.methods || []).join(\", \") || \"unknown\")],\n          [\"AI code found\", codeValue((item.aiPatterns || []).join(\", \") || \"none\")],\n        ]),\n      );\n  } else if (kind === \"entrypoints\") {\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      section(\"How the user starts this\", codeValue(item.hook)) +\n      section(\"Where the message is sent\", codeValue(item.api));\n  }\n\n  return (\n    '<div class=\"grid gap-4\">' +\n    '<div class=\"flex flex-wrap items-start gap-2\"><h2 class=\"text-lg font-semibold text-gray-900 flex-1\">' +\n    escapeHtml(step ? displayStepTitle(step) : kind === \"prompts\" ? promptTitle(item, \"\") : item.name || item.hook) +\n    \"</h2>\" +\n    (badges.length ? '<div class=\"flex flex-wrap gap-1\">' + badges.join(\"\") + \"</div>\" : \"\") +\n    \"</div>\" +\n    body +\n    locBar(item) +\n    \"</div>\"\n  );\n}\n\nfunction riskTone(severity) {\n  if (severity === \"high\") return \"high\";\n  if (severity === \"medium\") return \"medium\";\n  return \"low\";\n}\n\nfunction renderRiskTimeline(risks) {\n  if (!risks.length) {\n    return '<p class=\"text-sm text-gray-500\">No risks detected for this agent.</p>';\n  }\n  return (\n    '<ol class=\"grid gap-3 list-none m-0 p-0\">' +\n    risks\n      .map(function (risk, index) {\n        const active = state.selectedId === risk.id;\n        return (\n          '<li><button type=\"button\" class=\"' +\n          flowCardClass(active, false) +\n          '\" data-risk-id=\"' +\n          escapeHtml(risk.id) +\n          '\">' +\n          '<div class=\"flex gap-3 px-3.5 py-3\">' +\n          '<div class=\"w-1 shrink-0 rounded-full ' +\n          (risk.severity === \"high\" ? \"bg-red-500\" : risk.severity === \"medium\" ? \"bg-amber-500\" : \"bg-gray-400\") +\n          '\" aria-hidden=\"true\"></div>' +\n          '<div class=\"min-w-0 flex-1\">' +\n          '<div class=\"flex flex-wrap items-center gap-2\">' +\n          '<span class=\"text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400\">Risk ' +\n          escapeHtml(String(index + 1)) +\n          \"</span>\" +\n          badge(risk.severity || \"risk\", riskTone(risk.severity)) +\n          \"</div>\" +\n          '<div class=\"mt-1 text-[15px] font-medium leading-snug text-gray-900\">' +\n          escapeHtml(risk.message || \"Risk\") +\n          \"</div>\" +\n          '<div class=\"mt-1 font-mono text-[12px] leading-relaxed text-gray-500 break-all\">' +\n          escapeHtml((risk.kind || \"risk\") + \" · \" + risk.file + \":\" + risk.line) +\n          \"</div>\" +\n          \"</div></div></button></li>\"\n        );\n      })\n      .join(\"\") +\n    \"</ol>\"\n  );\n}\n\nfunction renderRiskDetail(risk) {\n  if (!risk) return '<p class=\"text-[15px] text-gray-500\">Select a risk to inspect it.</p>';\n  return (\n    '<div class=\"grid gap-4\">' +\n    '<div class=\"flex flex-wrap items-start gap-2\"><h2 class=\"text-lg font-semibold text-gray-900 flex-1\">' +\n    escapeHtml(risk.message || \"Risk\") +\n    \"</h2>\" +\n    '<div class=\"flex flex-wrap gap-1\">' +\n    badge(risk.severity || \"risk\", riskTone(risk.severity)) +\n    badge(risk.kind || \"risk\", \"low\") +\n    \"</div></div>\" +\n    locBar(risk) +\n    section(\"Why this was flagged\", preBlock(risk.evidenceFull || risk.evidence || \"No evidence captured\")) +\n    section(\"Recommended next step\", '<p class=\"text-[15px] leading-relaxed text-gray-800\">' + escapeHtml(risk.fix || \"Review this risk in the referenced code path.\") + \"</p>\") +\n    (risk.targetId ? section(\"Code target\", '<code class=\"font-mono text-xs text-gray-600\">' + escapeHtml(risk.targetId) + \"</code>\") : \"\") +\n    \"</div>\"\n  );\n}\n\nfunction renderFlowTimeline(steps) {\n  if (!steps.length) {\n    return '<p class=\"text-sm text-gray-500\">No execution flow for this agent.</p>';\n  }\n  return (\n    '<ol class=\"flow-track list-none m-0 p-0\">' +\n    steps\n      .map(function (step, index) {\n        const meta = PHASE_META[step.phase] || PHASE_META.empty;\n        const active = state.selectedId === step.id;\n        const nested = !!step.nested;\n        const isLast = index === steps.length - 1;\n        const railPad = nested ? \"pt-0\" : \"pt-0\";\n        return (\n          '<li class=\"flow-step grid grid-cols-[2.75rem_minmax(0,1fr)] gap-x-3' +\n          (nested ? \" flow-step-nested\" : \"\") +\n          '\">' +\n          '<div class=\"flow-rail flex flex-col items-center ' +\n          railPad +\n          '\">' +\n          flowStepMarker(step, active) +\n          (!isLast ? '<div class=\"flow-rail-line w-px flex-1 min-h-3 bg-gray-200 mt-1\"></div>' : \"\") +\n          \"</div>\" +\n          '<div class=\"pb-3 min-w-0\">' +\n          '<button type=\"button\" class=\"' +\n          flowCardClass(active, nested) +\n          '\" data-flow-id=\"' +\n          escapeHtml(step.id) +\n          '\" data-flow-kind=\"' +\n          escapeHtml(step.kind) +\n          '\">' +\n          '<div class=\"flex gap-3 px-3.5 py-3\">' +\n          '<div class=\"w-1 shrink-0 rounded-full ' +\n          phaseAccent(step.phase) +\n          '\" aria-hidden=\"true\"></div>' +\n          '<div class=\"min-w-0 flex-1\">' +\n          '<div class=\"text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400\">' +\n          escapeHtml(meta.label) +\n          \"</div>\" +\n          '<div class=\"mt-1 text-[15px] font-medium leading-snug text-gray-900\">' +\n          escapeHtml(displayStepTitle(step)) +\n          \"</div>\" +\n          '<div class=\"mt-1 font-mono text-[12px] leading-relaxed text-gray-500 break-all\">' +\n          escapeHtml(step.subtitle) +\n          \"</div>\" +\n          \"</div>\" +\n          \"</div>\" +\n          \"</button>\" +\n          \"</div>\" +\n          \"</li>\"\n        );\n      })\n      .join(\"\") +\n    \"</ol>\"\n  );\n}\n\nasync function copyText(value) {\n  try {\n    if (navigator.clipboard && window.isSecureContext) {\n      await navigator.clipboard.writeText(value);\n      return;\n    }\n  } catch (e) {}\n  const ta = document.createElement(\"textarea\");\n  ta.value = value;\n  document.body.appendChild(ta);\n  ta.select();\n  document.execCommand(\"copy\");\n  document.body.removeChild(ta);\n}\n\nfunction render() {\n  const agent = currentAgent();\n  const steps = flowStepsForAgent(state.agentId);\n  const risks = byAgent(trace.risks || []);\n\n  document.querySelector(\"#agents\").innerHTML =\n    (trace.agents || [])\n      .map(function (item) {\n        return (\n          '<button type=\"button\" class=\"' +\n          agentButtonClass(item.id === state.agentId) +\n          '\" data-agent=\"' +\n          escapeHtml(item.id) +\n          '\">' +\n          escapeHtml(item.name) +\n          \"</button>\"\n        );\n      })\n      .join(\"\") ||\n    '<span class=\"text-sm text-gray-500\">No agents detected</span>';\n\n  document.querySelectorAll(\"[data-agent]\").forEach(function (button) {\n    button.addEventListener(\"click\", function () {\n      state.agentId = button.dataset.agent;\n      state.selectedId = \"\";\n      state.kind = \"\";\n      render();\n    });\n  });\n\n  const agentName = document.querySelector(\"#agent-name\");\n  if (agentName) agentName.textContent = agent ? agent.name : \"No agent detected\";\n  const agentDescription = document.querySelector(\"#agent-description\");\n  if (agentDescription) {\n    agentDescription.textContent = agent\n      ? agent.description || \"Static scan found agent-like behavior in this code path.\"\n      : \"Run the scanner on a repo with AI SDK routes or client hooks.\";\n  }\n\n  const tabs = document.querySelector(\"#view-tabs\");\n  if (tabs) {\n    tabs.innerHTML =\n      '<button type=\"button\" class=\"' +\n      viewButtonClass(state.view === \"report\") +\n      '\" data-view=\"report\">Report</button>' +\n      '<button type=\"button\" class=\"' +\n      viewButtonClass(state.view === \"risks\") +\n      '\" data-view=\"risks\">Risks ' +\n      escapeHtml(String(risks.length)) +\n      \"</button>\";\n    tabs.querySelectorAll(\"[data-view]\").forEach(function (button) {\n      button.addEventListener(\"click\", function () {\n        state.view = button.dataset.view;\n        state.selectedId = \"\";\n        state.kind = \"\";\n        render();\n      });\n    });\n  }\n\n  const noteEl = document.querySelector(\"#flow-note\");\n  const kicker = document.querySelector(\"#section-kicker\");\n  if (kicker) kicker.textContent = state.view === \"risks\" ? \"Risks\" : \"User journey\";\n  if (noteEl) {\n    noteEl.textContent =\n      state.view === \"risks\"\n        ? \"Static risks found for the selected agent. Treat these as review targets, not runtime proof.\"\n        : trace.flowNote || \"\";\n  }\n\n  if (state.view === \"risks\") {\n    if (!state.selectedId && risks[0]) {\n      state.selectedId = risks[0].id;\n      state.kind = \"risks\";\n    }\n    const currentRisk = risks.find(function (risk) {\n      return risk.id === state.selectedId;\n    });\n    if (state.selectedId && !currentRisk && risks[0]) {\n      state.selectedId = risks[0].id;\n      state.kind = \"risks\";\n    }\n\n    document.querySelector(\"#flow-timeline\").innerHTML = renderRiskTimeline(risks);\n    document.querySelectorAll(\"[data-risk-id]\").forEach(function (button) {\n      button.addEventListener(\"click\", function () {\n        state.selectedId = button.dataset.riskId;\n        state.kind = \"risks\";\n        render();\n      });\n    });\n\n    const risk = risks.find(function (item) {\n      return item.id === state.selectedId;\n    });\n    const riskIndex = risk ? risks.findIndex((item) => item.id === risk.id) + 1 : 0;\n    document.querySelector(\"#detail-title\").textContent = risk ? \"Risk \" + riskIndex + \" · \" + (risk.severity || \"review\") : \"Risk details\";\n    const detailBox = document.querySelector(\"#detail-box\");\n    detailBox.className =\n      \"min-h-[280px] rounded-xl bg-white p-5 shadow-sm \" +\n      (risk ? \"border-2 border-blue-500 ring-2 ring-blue-50\" : \"border border-gray-200\");\n    detailBox.innerHTML = renderRiskDetail(risk);\n\n    document.querySelectorAll(\".copy-path\").forEach(function (button) {\n      button.addEventListener(\"click\", function () {\n        copyText(button.dataset.copy);\n      });\n    });\n    return;\n  }\n\n  if (!state.selectedId && steps[0]) {\n    state.selectedId = steps[0].id;\n    state.kind = steps[0].kind;\n  }\n  const currentStep = steps.find(function (s) {\n    return s.id === state.selectedId;\n  });\n  if (state.selectedId && !currentStep && steps[0]) {\n    state.selectedId = steps[0].id;\n    state.kind = steps[0].kind;\n  }\n\n  document.querySelector(\"#flow-timeline\").innerHTML = renderFlowTimeline(steps);\n  document.querySelectorAll(\"[data-flow-id]\").forEach(function (button) {\n    button.addEventListener(\"click\", function () {\n      state.selectedId = button.dataset.flowId;\n      state.kind = button.dataset.flowKind;\n      render();\n    });\n  });\n\n  const step = steps.find(function (s) {\n    return s.id === state.selectedId;\n  });\n  const item = findItem(state.kind, state.selectedId);\n  document.querySelector(\"#detail-title\").textContent = step ? \"Step \" + step.order + \" · \" + (PHASE_META[step.phase]?.label || \"Details\") : \"Step details\";\n  const detailBox = document.querySelector(\"#detail-box\");\n  detailBox.className =\n    \"min-h-[280px] rounded-xl bg-white p-5 shadow-sm \" +\n    (step ? \"border-2 border-blue-500 ring-2 ring-blue-50\" : \"border border-gray-200\");\n  detailBox.innerHTML = renderDetail(item, state.kind, step);\n\n  document.querySelectorAll(\".copy-path\").forEach(function (button) {\n    button.addEventListener(\"click\", function () {\n      copyText(button.dataset.copy);\n    });\n  });\n}\n\nrender();\n";
+  const sdkLabel = escapeHtml(trace.aiSdk?.label || "ai package not detected");
+  const diffSummary = trace.scanDiff?.hasPrevious
+    ? ` · ${trace.scanDiff.newCount} new / ${trace.scanDiff.fixedCount} fixed risks`
+    : "";
+  const highRiskCount = trace.summary?.highRisks ?? 0;
+  const clientScript = "// Embedded into renderSimpleHtmlReport — client-side only (no Node).\nconst PHASE_META = {\n  entry: { label: \"Start\", tone: \"info\" },\n  route: { label: \"Backend\", tone: \"info\" },\n  prompt: { label: \"Instructions\", tone: \"low\" },\n  model: { label: \"AI response\", tone: \"info\" },\n  tool: { label: \"Lookup\", tone: \"ok\" },\n  \"side-effect\": { label: \"Action\", tone: \"high\" },\n  output: { label: \"Answer\", tone: \"ok\" },\n  empty: { label: \"—\", tone: \"low\" },\n};\n\nconst state = {\n  agentId: (trace.agents || [])[0]?.id || \"\",\n  selectedId: \"\",\n  kind: \"\",\n  view: \"report\",\n  severityFilter: \"all\",\n  search: \"\",\n};\n\nconst escapeHtml = (value) =>\n  String(value ?? \"\").replace(/[&<>\"']/g, (char) =>\n    ({ \"&\": \"&amp;\", \"<\": \"&lt;\", \">\": \"&gt;\", '\"': \"&quot;\", \"'\": \"&#39;\" })[char],\n  );\n\nconst byAgent = (items) => (items || []).filter((item) => item.agentId === state.agentId);\nconst currentAgent = () => (trace.agents || []).find((agent) => agent.id === state.agentId) || null;\n\nfunction promptTitle(item, fallback) {\n  if (!item) return fallback || \"Prompt\";\n  const kind =\n    item.kind === \"system\" || item.kind === \"instructions\"\n      ? \"System instructions are added\"\n      : item.kind === \"messages\"\n        ? \"Conversation context is added\"\n        : \"User instructions are added\";\n  const name = String(item.name || \"\").trim();\n  if (name && name.toLowerCase() !== String(item.kind || \"\").toLowerCase()) return kind + \" · \" + name;\n  if (item.valueType === \"reference\") return kind + \" from a shared reference\";\n  if (item.valueType === \"named constant\") return kind + \" from a named prompt\";\n  return kind;\n}\n\nfunction displayStepTitle(step) {\n  if (!step) return \"\";\n  return step.title || \"\";\n}\n\nfunction agentButtonClass(active) {\n  return [\n    \"rounded-full border px-3 py-1.5 text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-[#0070f3]/30 whitespace-nowrap\",\n    active\n      ? \"border-[#0070f3] text-[#3291ff] bg-[#0070f3]/10\"\n      : \"border-[#333] text-[#888] bg-[#0a0a0a] hover:border-[#555] hover:text-[#ededed]\",\n  ].join(\" \");\n}\n\nfunction viewButtonClass(active) {\n  return [\n    \"rounded-md px-3 py-1.5 text-xs font-semibold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0070f3]/30\",\n    active ? \"bg-[#ededed] text-black shadow-sm\" : \"text-[#888] hover:text-[#ededed]\",\n  ].join(\" \");\n}\n\nfunction badge(text, tone) {\n  const tones = {\n    high: \"bg-[#ff5555]/10 text-[#ff8888] border-[#ff5555]/30\",\n    medium: \"bg-[#f5a623]/10 text-[#f5c26b] border-[#f5a623]/30\",\n    low: \"bg-[#333]/50 text-[#888] border-[#444]\",\n    info: \"bg-[#0070f3]/10 text-[#3291ff] border-[#0070f3]/30\",\n    ok: \"bg-[#50e3c2]/10 text-[#50e3c2] border-[#50e3c2]/30\",\n  };\n  return (\n    '<span class=\"inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ' +\n    (tones[tone] || tones.low) +\n    '\">' +\n    escapeHtml(text) +\n    \"</span>\"\n  );\n}\n\nfunction flowStepsForAgent(agentId) {\n  if (trace.flows && trace.flows[agentId]) return trace.flows[agentId];\n  return [];\n}\n\nfunction findItem(kind, id) {\n  if (!kind || !id || id.endsWith(\":output\")) return null;\n  const key =\n    kind === \"entrypoints\"\n      ? \"uiEntrypoints\"\n      : kind === \"chains\"\n        ? \"chains\"\n        : kind === \"routes\"\n          ? \"routes\"\n          : kind === \"tools\"\n            ? \"tools\"\n            : kind === \"prompts\"\n              ? \"prompts\"\n              : kind;\n  return (trace[key] || []).find((item) => item.id === id) || null;\n}\n\nfunction phaseAccent(phase) {\n  const map = {\n    entry: \"bg-sky-500\",\n    route: \"bg-indigo-500\",\n    prompt: \"bg-violet-500\",\n    model: \"bg-[#0070f3]\",\n    tool: \"bg-emerald-500\",\n    \"side-effect\": \"bg-rose-500\",\n    output: \"bg-gray-800\",\n    empty: \"bg-[#444]\",\n  };\n  return map[phase] || \"bg-gray-400\";\n}\n\nfunction flowCardClass(active, nested) {\n  return [\n    \"flow-card w-full text-left rounded-lg border transition-all\",\n    \"focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0070f3]/30 focus-visible:ring-offset-1 focus-visible:ring-offset-black\",\n    nested ? \"border-[#2a2a2a] bg-[#111]\" : \"border-[#333] bg-[#0a0a0a]\",\n    active ? \"!border-[#0070f3] ring-2 ring-[#0070f3]/20\" : \"hover:border-[#555]\",\n  ].join(\" \");\n}\n\nfunction flowStepMarker(step, active) {\n  if (step.nested) {\n    return (\n      '<div class=\"mt-3 flex h-2 w-2 shrink-0 rounded-full ' +\n      (active ? \"bg-[#0070f3]\" : \"bg-[#444]\") +\n      '\" aria-hidden=\"true\"></div>'\n    );\n  }\n  return (\n    '<div class=\"mt-2.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold tabular-nums ' +\n    (active ? \"bg-[#0070f3] text-white shadow-sm\" : \"border border-[#444] bg-[#0a0a0a] text-[#888]\") +\n    '\">' +\n    escapeHtml(String(step.order)) +\n    \"</div>\"\n  );\n}\n\nfunction section(title, body) {\n  return (\n    '<div class=\"grid gap-2\"><h3 class=\"text-xs font-semibold uppercase tracking-wide text-[#888]\">' +\n    escapeHtml(title) +\n    '</h3><div class=\"text-[15px] text-[#ededed]\">' +\n    body +\n    \"</div></div>\"\n  );\n}\n\nfunction paragraph(text, tone) {\n  return '<p class=\"leading-relaxed ' + (tone || \"text-[#ededed]\") + '\">' + escapeHtml(text) + \"</p>\";\n}\n\nfunction codeValue(value) {\n  return '<code class=\"font-mono text-sm text-[#a1a1a1] break-words\">' + escapeHtml(value || \"—\") + \"</code>\";\n}\n\nfunction detailList(items) {\n  return (\n    '<dl class=\"grid gap-2 text-sm\">' +\n    items\n      .map(function (item) {\n        return (\n          '<div class=\"grid gap-1 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-3\">' +\n          '<dt class=\"text-xs font-semibold uppercase tracking-wide text-[#666]\">' +\n          escapeHtml(item[0]) +\n          \"</dt>\" +\n          '<dd class=\"min-w-0 text-[#ededed]\">' +\n          item[1] +\n          \"</dd>\" +\n          \"</div>\"\n        );\n      })\n      .join(\"\") +\n    \"</dl>\"\n  );\n}\n\nfunction preBlock(text, roomy) {\n  const sizeClass = roomy\n    ? \"max-h-[min(58vh,640px)] p-4 text-[13px] leading-relaxed\"\n    : \"max-h-72 p-3 text-xs\";\n  return (\n    '<pre class=\"mt-2 overflow-auto rounded-lg border border-[#333] bg-[#080808] font-mono text-[#ededed] whitespace-pre-wrap break-words ' +\n    sizeClass +\n    '\">' +\n    escapeHtml(text || \"\") +\n    \"</pre>\"\n  );\n}\n\nfunction itemLocation(item) {\n  if (!item || !item.file) return \"Unknown location\";\n  return item.file + (item.line ? \":\" + item.line : \"\");\n}\n\nfunction promptText(item) {\n  return item?.text || item?.preview || \"No prompt text resolved\";\n}\n\nfunction promptKindLabel(item) {\n  if (!item) return \"prompt\";\n  if (item.kind === \"system\") return \"system prompt\";\n  if (item.kind === \"instructions\") return \"instructions\";\n  if (item.kind === \"messages\") return \"messages\";\n  return item.kind || \"prompt\";\n}\n\nfunction promptsForChain(chain) {\n  const linked = (chain?.promptIds || [])\n    .map((promptId) => (trace.prompts || []).find((prompt) => prompt.id === promptId))\n    .filter(Boolean);\n  if (linked.length) return linked;\n  return (chain?.prompts || []).map(function (value, index) {\n    return {\n      id: chain.id + \":prompt-fallback-\" + index,\n      kind: value.split(\":\")[0] || \"prompt\",\n      valueType: \"call argument\",\n      file: chain.file,\n      line: chain.line,\n      preview: value,\n      text: value,\n    };\n  });\n}\n\nfunction toolsForChain(chain) {\n  const linked = (chain?.toolIds || [])\n    .map((toolId) => (trace.tools || []).find((tool) => tool.id === toolId))\n    .filter(Boolean);\n  if (linked.length) return linked;\n  return (chain?.tools || []).map(function (name, index) {\n    return {\n      id: chain.id + \":tool-fallback-\" + index,\n      name,\n      description: \"Referenced by this model call\",\n      schema: \"No schema resolved\",\n      file: chain.file,\n      line: chain.line,\n      sideEffect: false,\n    };\n  });\n}\n\nfunction chainsForPrompt(prompt) {\n  return (trace.chains || []).filter(function (chain) {\n    if ((chain.promptIds || []).includes(prompt.id)) return true;\n    const text = promptText(prompt);\n    return (chain.prompts || []).some(function (value) {\n      return String(value || \"\").includes(text) || text.includes(String(value || \"\"));\n    });\n  });\n}\n\nfunction chainsForTool(tool) {\n  return (trace.chains || []).filter(function (chain) {\n    return (chain.toolIds || []).includes(tool.id) || (chain.tools || []).includes(tool.name);\n  });\n}\n\nfunction relationCards(items, empty) {\n  if (!items.length) return '<p class=\"text-sm text-[#888]\">' + escapeHtml(empty) + \"</p>\";\n  return (\n    '<div class=\"grid gap-3\">' +\n    items\n      .map(function (item) {\n        return (\n          '<div class=\"rounded-lg border border-[#2a2a2a] bg-[#111] p-3\">' +\n          '<div class=\"flex flex-wrap items-center gap-2\">' +\n          (item.badge ? badge(item.badge, item.tone || \"info\") : \"\") +\n          '<h4 class=\"text-sm font-semibold text-[#ededed]\">' +\n          escapeHtml(item.title) +\n          \"</h4></div>\" +\n          (item.meta ? '<p class=\"mt-1 font-mono text-xs text-[#888] break-all\">' + escapeHtml(item.meta) + \"</p>\" : \"\") +\n          (item.body ? '<div class=\"mt-2 text-sm leading-relaxed text-[#a1a1a1]\">' + item.body + \"</div>\" : \"\") +\n          \"</div>\"\n        );\n      })\n      .join(\"\") +\n    \"</div>\"\n  );\n}\n\nfunction chainRelationCard(chain) {\n  return {\n    badge: chain.type || \"model\",\n    tone: \"info\",\n    title: \"Feeds \" + (chain.type || \"model call\"),\n    meta: itemLocation(chain),\n    body:\n      detailList([\n        [\"Model\", codeValue(chain.modelFull || chain.model)],\n        [\"Tools\", escapeHtml((chain.tools || []).join(\", \") || \"none\")],\n      ]),\n  };\n}\n\nfunction promptRelationCard(prompt) {\n  return {\n    badge: promptKindLabel(prompt),\n    tone: \"low\",\n    title: promptTitle(prompt, \"Prompt\"),\n    meta: itemLocation(prompt),\n    body: preBlock(promptText(prompt), true),\n  };\n}\n\nfunction toolRelationCard(tool) {\n  return {\n    badge: tool.sideEffect ? \"action\" : \"lookup\",\n    tone: tool.sideEffect ? \"high\" : \"ok\",\n    title: tool.name || \"Tool\",\n    meta: itemLocation(tool),\n    body:\n      '<p class=\"text-sm text-[#a1a1a1]\">' +\n      escapeHtml(tool.descriptionFull || tool.description || \"No description detected\") +\n      \"</p>\" +\n      detailList([\n        [\"Input\", codeValue(tool.schema || \"No schema resolved\")],\n        [\"State change\", codeValue(tool.sideEffect ? \"yes\" : \"no\")],\n      ]),\n  };\n}\n\nfunction searchTextForStep(step) {\n  const item = findItem(step.kind, step.id);\n  if (!item) return [step.title, step.subtitle, step.note].join(\" \");\n  if (step.kind === \"prompts\") return [step.title, step.subtitle, step.note, promptText(item)].join(\" \");\n  if (step.kind === \"chains\") {\n    return [\n      step.title,\n      step.subtitle,\n      step.note,\n      item.model,\n      item.modelFull,\n      (item.prompts || []).join(\" \"),\n      promptsForChain(item).map(promptText).join(\" \"),\n      (item.tools || []).join(\" \"),\n    ].join(\" \");\n  }\n  if (step.kind === \"tools\") {\n    return [step.title, step.subtitle, step.note, item.name, item.descriptionFull, item.description, item.schema, item.evidence].join(\" \");\n  }\n  return [step.title, step.subtitle, step.note].join(\" \");\n}\n\nfunction editorHref(item, scheme) {\n  const root = (trace.root || \"\").replace(/\\\\/g, \"/\");\n  const file = (item.file || \"\").replace(/\\\\/g, \"/\");\n  return scheme + \"://file/\" + root + \"/\" + file + \":\" + item.line;\n}\n\nfunction locBar(item) {\n  const loc = item.file + \":\" + item.line;\n  return (\n    '<div class=\"flex flex-wrap items-center gap-2 text-sm\">' +\n    '<code class=\"font-mono text-xs text-[#888]\">' +\n    escapeHtml(loc) +\n    \"</code>\" +\n    '<a class=\"text-xs font-medium text-[#3291ff] hover:underline\" href=\"' +\n    escapeHtml(editorHref(item, \"cursor\")) +\n    '\">Open in Cursor</a>' +\n    '<a class=\"text-xs font-medium text-[#3291ff] hover:underline\" href=\"' +\n    escapeHtml(editorHref(item, \"vscode\")) +\n    '\">VS Code</a>' +\n    '<button type=\"button\" class=\"copy-path text-xs font-medium text-[#888] hover:text-[#ededed]\" data-copy=\"' +\n    escapeHtml(loc) +\n    '\">Copy path</button>' +\n    \"</div>\"\n  );\n}\n\nfunction matchesSearch(text) {\n  const q = (state.search || \"\").trim().toLowerCase();\n  if (!q) return true;\n  return String(text || \"\").toLowerCase().includes(q);\n}\n\nfunction filterRisks(risks) {\n  return risks.filter(function (risk) {\n    if (state.severityFilter !== \"all\" && risk.severity !== state.severityFilter) return false;\n    return matchesSearch([risk.message, risk.kind, risk.file, risk.evidence].join(\" \"));\n  });\n}\n\nfunction buildMermaidForAgent(agentId) {\n  const steps = flowStepsForAgent(agentId).filter(function (s) {\n    return s.phase !== \"empty\";\n  });\n  if (!steps.length) return \"\";\n  const lines = [\"flowchart TD\"];\n  steps.forEach(function (step, index) {\n    const nodeId = \"N\" + index;\n    const label = (step.title || step.phase || \"step\").replace(/\"/g, \"'\");\n    lines.push('  ' + nodeId + '[\"' + label + '\"]');\n    if (index > 0) lines.push(\"  N\" + (index - 1) + \" --> \" + nodeId);\n  });\n  return lines.join(\"\\n\");\n}\n\nfunction renderOutputDetail(step, chain) {\n  return (\n    '<div class=\"grid gap-4\">' +\n    '<h2 class=\"text-lg font-semibold text-[#ededed]\">' +\n    escapeHtml(step.title) +\n    \"</h2>\" +\n    section(\"What this means\", paragraph(step.note || \"The product shows the AI response to the user.\")) +\n    (chain\n      ? section(\n          \"Code details\",\n          detailList([\n            [\"Output\", codeValue(step.subtitle)],\n            [\"Model call\", codeValue(chain.type || \"model call\")],\n          ]),\n        ) +\n        locBar(chain) +\n        '<p class=\"text-xs text-[#666] mt-2\">In the UI, streamed tokens appear in the chat component; non-stream responses render as a single message or JSON payload.</p>'\n      : \"\") +\n    \"</div>\"\n  );\n}\n\nfunction productMeaning(kind, item, step) {\n  if (kind === \"entrypoints\") {\n    return \"This is the product moment where a user starts the AI experience, usually by sending a message or prompt.\";\n  }\n  if (kind === \"routes\") {\n    return \"This backend endpoint receives the user's request and prepares the AI work.\";\n  }\n  if (kind === \"prompts\") {\n    return \"These instructions shape how the AI should behave before it answers the user.\";\n  }\n  if (kind === \"chains\") {\n    return \"This is where the app asks an AI model to generate the next response.\";\n  }\n  if (kind === \"tools\" && item && item.sideEffect) {\n    return \"The AI can call this helper to change something outside the chat, such as a database, payment, email, or another service.\";\n  }\n  if (kind === \"tools\") {\n    return \"The AI can call this helper to look up information before it answers.\";\n  }\n  return step && step.note ? step.note : \"This is one step in the AI flow.\";\n}\n\nfunction renderDetail(item, kind, step) {\n  if (step && step.phase === \"output\") {\n    const chainId = step.id.replace(/:output$/, \"\");\n    const chain = (trace.chains || []).find((c) => c.id === chainId);\n    return renderOutputDetail(step, chain);\n  }\n  if (!item) {\n    if (step && step.phase === \"empty\") {\n      return '<p class=\"text-[15px] text-[#888]\">' + escapeHtml(step.subtitle) + \"</p>\";\n    }\n    return '<p class=\"text-[15px] text-[#888]\">Select a step in the flow to inspect it.</p>';\n  }\n\n  const badges = [];\n  if (kind === \"tools\" && item.sideEffect) badges.push(badge(\"side effect\", \"high\"));\n  if (kind === \"prompts\" && item.inline) badges.push(badge(\"inline\", \"medium\"));\n  if (kind === \"chains\") {\n    if (!item.hasEval) badges.push(badge(\"no eval\", \"medium\"));\n    if (!item.hasTrace) badges.push(badge(\"no trace\", \"high\"));\n    else badges.push(badge(\"trace ok\", \"ok\"));\n  }\n\n  let body = \"\";\n  if (kind === \"prompts\") {\n    const promptChains = chainsForPrompt(item);\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      section(\"Full prompt text\", preBlock(promptText(item), true)) +\n      section(\n        \"This prompt feeds into\",\n        relationCards(\n          promptChains.map(chainRelationCard),\n          \"No model call was linked to this prompt. It may be assembled dynamically or passed through another helper.\",\n        ),\n      ) +\n      section(\n        \"Code details\",\n        detailList([\n          [\"Prompt type\", codeValue(item.kind)],\n          [\"Value source\", codeValue(item.valueType)],\n        ]),\n      );\n  } else if (kind === \"tools\") {\n    const schemaRows = (item.schemaFields || [])\n      .map(\n        (f) =>\n          '<tr class=\"border-t border-[#2a2a2a]\"><td class=\"py-2 pr-4 font-mono text-xs\">' +\n          escapeHtml(f.name) +\n          '</td><td class=\"py-2 font-mono text-xs text-[#888]\">' +\n          escapeHtml(f.type) +\n          \"</td></tr>\",\n      )\n      .join(\"\");\n    const callerChains = chainsForTool(item);\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      (item.sideEffect\n        ? '<p class=\"rounded-lg border border-[#ff5555]/30 bg-[#ff5555]/10 px-3 py-2 text-sm text-[#ff8888]\">This can change real product state. Review permissions, logging, and tests before trusting model-triggered calls.</p>'\n        : \"\") +\n      section(\n        \"Model calls that can call this tool\",\n        relationCards(\n          callerChains.map(chainRelationCard),\n          \"No model call was linked to this tool. It may be passed dynamically or exported for another file.\",\n        ),\n      ) +\n      section(\n        \"Code details\",\n        detailList([\n          [\"Tool name\", codeValue(item.name)],\n          [\"Description\", escapeHtml(item.descriptionFull || item.description || \"—\")],\n          [\"Can change state\", codeValue(item.sideEffect ? \"yes\" : \"no\")],\n        ]),\n      ) +\n      section(\n        \"Input data this tool expects\",\n        schemaRows\n          ? '<table class=\"w-full text-left\"><thead><tr><th class=\"pb-2 text-xs text-[#888]\">Field</th><th class=\"pb-2 text-xs text-[#888]\">Type</th></tr></thead><tbody>' +\n            schemaRows +\n            \"</tbody></table>\"\n          : '<p class=\"text-[#888] text-sm\">' + escapeHtml(item.schema || \"No schema\") + \"</p>\",\n      ) +\n      section(\"Tool implementation\", preBlock(item.evidence || item.snippet || \"No tool implementation captured\", true));\n  } else if (kind === \"chains\") {\n    const loopRows = [];\n    if (item.loop) {\n      if (item.loop.hasStopWhen) loopRows.push([\"Loop bound\", codeValue(item.loop.stepCount ? \"stepCountIs(\" + item.loop.stepCount + \")\" : item.loop.stopWhen || item.loop.maxSteps)]);\n      if (item.loop.toolChoice) loopRows.push([\"toolChoice\", codeValue(item.loop.toolChoice)]);\n      if (item.loop.prepareStep) loopRows.push([\"prepareStep\", codeValue(\"yes\")]);\n    }\n    if (item.telemetry) {\n      loopRows.push([\"Telemetry\", codeValue(item.telemetry.isEnabled ? \"experimental_telemetry on\" : \"not detected\")]);\n      if (item.telemetry.hasFunctionId) loopRows.push([\"functionId\", codeValue(\"set\")]);\n    }\n    const chainPrompts = promptsForChain(item);\n    const chainTools = toolsForChain(item);\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      section(\n        \"Code details\",\n        detailList([\n          [\"Model\", codeValue(item.modelFull || item.model)],\n          [\"Prompt inputs\", escapeHtml(chainPrompts.length ? chainPrompts.map((prompt) => promptKindLabel(prompt)).join(\", \") : \"—\")],\n          [\"Tools available\", escapeHtml(chainTools.length ? chainTools.map((tool) => tool.name).join(\", \") : \"—\")],\n          ...loopRows,\n        ]),\n      ) +\n      section(\n        \"Prompts read by this model call\",\n        relationCards(\n          chainPrompts.map(promptRelationCard),\n          \"No prompt text was linked to this model call.\",\n        ),\n      ) +\n      section(\n        \"Tools this model can call\",\n        relationCards(\n          chainTools.map(toolRelationCard),\n          \"No tools were linked to this model call.\",\n        ),\n      );\n  } else if (kind === \"routes\") {\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      section(\n        \"Code details\",\n        detailList([\n          [\"HTTP methods\", codeValue((item.methods || []).join(\", \") || \"unknown\")],\n          [\"AI code found\", codeValue((item.aiPatterns || []).join(\", \") || \"none\")],\n        ]),\n      );\n  } else if (kind === \"entrypoints\") {\n    body =\n      section(\"What this means\", paragraph(productMeaning(kind, item, step))) +\n      section(\"How the user starts this\", codeValue(item.hook)) +\n      section(\"Where the message is sent\", codeValue(item.api));\n  }\n\n  return (\n    '<div class=\"grid gap-4\">' +\n    '<div class=\"flex flex-wrap items-start gap-2\"><h2 class=\"text-lg font-semibold text-[#ededed] flex-1\">' +\n    escapeHtml(step ? displayStepTitle(step) : kind === \"prompts\" ? promptTitle(item, \"\") : item.name || item.hook) +\n    \"</h2>\" +\n    (badges.length ? '<div class=\"flex flex-wrap gap-1\">' + badges.join(\"\") + \"</div>\" : \"\") +\n    \"</div>\" +\n    body +\n    locBar(item) +\n    \"</div>\"\n  );\n}\n\nfunction riskTone(severity) {\n  if (severity === \"high\") return \"high\";\n  if (severity === \"medium\") return \"medium\";\n  return \"low\";\n}\n\nfunction renderRiskTimeline(risks) {\n  if (!risks.length) {\n    return '<p class=\"text-sm text-[#888]\">No risks detected for this agent.</p>';\n  }\n  return (\n    '<ol class=\"grid gap-3 list-none m-0 p-0\">' +\n    risks\n      .map(function (risk, index) {\n        const active = state.selectedId === risk.id;\n        return (\n          '<li><button type=\"button\" class=\"' +\n          flowCardClass(active, false) +\n          '\" data-risk-id=\"' +\n          escapeHtml(risk.id) +\n          '\">' +\n          '<div class=\"flex gap-3 px-3.5 py-3\">' +\n          '<div class=\"w-1 shrink-0 rounded-full ' +\n          (risk.severity === \"high\" ? \"bg-[#ff5555]\" : risk.severity === \"medium\" ? \"bg-[#f5a623]\" : \"bg-[#666]\") +\n          '\" aria-hidden=\"true\"></div>' +\n          '<div class=\"min-w-0 flex-1\">' +\n          '<div class=\"flex flex-wrap items-center gap-2\">' +\n          '<span class=\"text-[10px] font-semibold uppercase tracking-[0.08em] text-[#666]\">Risk ' +\n          escapeHtml(String(index + 1)) +\n          \"</span>\" +\n          badge(risk.severity || \"risk\", riskTone(risk.severity)) +\n          \"</div>\" +\n          '<div class=\"mt-1 text-[15px] font-medium leading-snug text-[#ededed]\">' +\n          escapeHtml(risk.message || \"Risk\") +\n          \"</div>\" +\n          '<div class=\"mt-1 font-mono text-[12px] leading-relaxed text-[#888] break-all\">' +\n          escapeHtml((risk.kind || \"risk\") + \" · \" + risk.file + \":\" + risk.line) +\n          \"</div>\" +\n          \"</div></div></button></li>\"\n        );\n      })\n      .join(\"\") +\n    \"</ol>\"\n  );\n}\n\nfunction renderRiskDetail(risk) {\n  if (!risk) return '<p class=\"text-[15px] text-[#888]\">Select a risk to inspect it.</p>';\n  return (\n    '<div class=\"grid gap-4\">' +\n    '<div class=\"flex flex-wrap items-start gap-2\"><h2 class=\"text-lg font-semibold text-[#ededed] flex-1\">' +\n    escapeHtml(risk.message || \"Risk\") +\n    \"</h2>\" +\n    '<div class=\"flex flex-wrap gap-1\">' +\n    badge(risk.severity || \"risk\", riskTone(risk.severity)) +\n    badge(risk.kind || \"risk\", \"low\") +\n    \"</div></div>\" +\n    locBar(risk) +\n    section(\"Why this was flagged\", preBlock(risk.evidenceFull || risk.evidence || \"No evidence captured\")) +\n    section(\n      \"Recommended fix\",\n      '<p class=\"text-[15px] leading-relaxed text-[#ededed] mb-2\">Copy this snippet into the referenced call site:</p>' +\n        preBlock(risk.fixSnippet || risk.fix || \"Review this risk in the referenced code path.\") +\n        '<button type=\"button\" class=\"copy-fix mt-2 rounded-lg border border-[#333] bg-[#111] px-3 py-1.5 text-xs font-semibold text-[#a1a1a1] hover:bg-[#1a1a1a]\" data-copy=\"' +\n        escapeHtml(risk.fixSnippet || risk.fix || \"\") +\n        '\">Copy fix snippet</button>',\n    ) +\n    (risk.targetId ? section(\"Code target\", '<code class=\"font-mono text-xs text-[#888]\">' + escapeHtml(risk.targetId) + \"</code>\") : \"\") +\n    \"</div>\"\n  );\n}\n\nfunction renderFlowTimeline(steps) {\n  if (!steps.length) {\n    return '<p class=\"text-sm text-[#888]\">No execution flow for this agent.</p>';\n  }\n  return (\n    '<ol class=\"flow-track list-none m-0 p-0\">' +\n    steps\n      .map(function (step, index) {\n        const meta = PHASE_META[step.phase] || PHASE_META.empty;\n        const active = state.selectedId === step.id;\n        const nested = !!step.nested;\n        const isLast = index === steps.length - 1;\n        const railPad = nested ? \"pt-0\" : \"pt-0\";\n        return (\n          '<li class=\"flow-step grid grid-cols-[2.75rem_minmax(0,1fr)] gap-x-3' +\n          (nested ? \" flow-step-nested\" : \"\") +\n          '\">' +\n          '<div class=\"flow-rail flex flex-col items-center ' +\n          railPad +\n          '\">' +\n          flowStepMarker(step, active) +\n          (!isLast ? '<div class=\"flow-rail-line w-px flex-1 min-h-3 bg-[#333] mt-1\"></div>' : \"\") +\n          \"</div>\" +\n          '<div class=\"pb-3 min-w-0\">' +\n          '<button type=\"button\" class=\"' +\n          flowCardClass(active, nested) +\n          '\" data-flow-id=\"' +\n          escapeHtml(step.id) +\n          '\" data-flow-kind=\"' +\n          escapeHtml(step.kind) +\n          '\">' +\n          '<div class=\"flex gap-3 px-3.5 py-3\">' +\n          '<div class=\"w-1 shrink-0 rounded-full ' +\n          phaseAccent(step.phase) +\n          '\" aria-hidden=\"true\"></div>' +\n          '<div class=\"min-w-0 flex-1\">' +\n          '<div class=\"text-[10px] font-semibold uppercase tracking-[0.08em] text-[#666]\">' +\n          escapeHtml(meta.label) +\n          \"</div>\" +\n          '<div class=\"mt-1 text-[15px] font-medium leading-snug text-[#ededed]\">' +\n          escapeHtml(displayStepTitle(step)) +\n          \"</div>\" +\n          '<div class=\"mt-1 font-mono text-[12px] leading-relaxed text-[#888] break-all\">' +\n          escapeHtml(step.subtitle) +\n          \"</div>\" +\n          \"</div>\" +\n          \"</div>\" +\n          \"</button>\" +\n          \"</div>\" +\n          \"</li>\"\n        );\n      })\n      .join(\"\") +\n    \"</ol>\"\n  );\n}\n\nasync function copyText(value) {\n  try {\n    if (navigator.clipboard && window.isSecureContext) {\n      await navigator.clipboard.writeText(value);\n      return;\n    }\n  } catch (e) {}\n  const ta = document.createElement(\"textarea\");\n  ta.value = value;\n  document.body.appendChild(ta);\n  ta.select();\n  document.execCommand(\"copy\");\n  document.body.removeChild(ta);\n}\n\nfunction renderScanDiffBanner() {\n  const el = document.querySelector(\"#scan-diff-banner\");\n  if (!el || !trace.scanDiff?.hasPrevious) {\n    if (el) el.textContent = \"\";\n    return;\n  }\n  const d = trace.scanDiff;\n  el.innerHTML =\n    '<span class=\"text-[#50e3c2] font-medium\">' +\n    d.fixedCount +\n    \" fixed</span> · <span class=\\\"text-[#f5c26b] font-medium\\\">\" +\n    d.newCount +\n    \" new</span> since \" +\n    escapeHtml(d.previousAt || \"last scan\");\n}\n\nfunction renderMermaid() {\n  const container = document.querySelector(\"#mermaid-flow\");\n  if (!container) return;\n  const def = buildMermaidForAgent(state.agentId);\n  if (!def || state.view === \"risks\") {\n    container.classList.add(\"hidden\");\n    container.innerHTML = \"\";\n    return;\n  }\n  container.classList.remove(\"hidden\");\n  container.innerHTML = '<pre class=\"mermaid text-sm\">' + escapeHtml(def) + \"</pre>\";\n  if (window.mermaid) {\n    try {\n      window.mermaid.initialize({ startOnLoad: false, theme: \"neutral\", securityLevel: \"loose\" });\n      window.mermaid.run({ nodes: container.querySelectorAll(\".mermaid\") });\n    } catch (e) {\n      /* mermaid optional */\n    }\n  }\n}\n\nfunction renderRiskFilters() {\n  const el = document.querySelector(\"#risk-filters\");\n  if (!el) return;\n  const risks = byAgent(trace.risks || []);\n  const counts = { all: risks.length, high: 0, medium: 0, low: 0 };\n  risks.forEach(function (r) {\n    if (counts[r.severity] !== undefined) counts[r.severity] += 1;\n  });\n  el.innerHTML = [\"all\", \"high\", \"medium\", \"low\"]\n    .map(function (sev) {\n      const active = state.severityFilter === sev;\n      return (\n        '<button type=\"button\" class=\"rounded-md border px-2 py-1 text-[11px] font-semibold ' +\n        (active ? \"border-[#0070f3] bg-[#0070f3]/10 text-[#3291ff]\" : \"border-[#333] text-[#888] hover:bg-[#111]\") +\n        '\" data-severity=\"' +\n        sev +\n        '\">' +\n        escapeHtml(sev) +\n        \" (\" +\n        counts[sev] +\n        \")</button>\"\n      );\n    })\n    .join(\"\");\n  el.querySelectorAll(\"[data-severity]\").forEach(function (button) {\n    button.addEventListener(\"click\", function () {\n      state.severityFilter = button.dataset.severity;\n      state.selectedId = \"\";\n      render();\n    });\n  });\n}\n\nfunction preferredInitialStep(steps) {\n  return steps.find((step) => step.phase === \"prompt\") || steps[0] || null;\n}\n\nfunction render() {\n  const agent = currentAgent();\n  const steps = flowStepsForAgent(state.agentId).filter(function (step) {\n    return matchesSearch(searchTextForStep(step));\n  });\n  const risks = filterRisks(byAgent(trace.risks || []));\n  renderScanDiffBanner();\n  renderRiskFilters();\n  const searchInput = document.querySelector(\"#report-search\");\n  if (searchInput && searchInput !== document.activeElement) {\n    searchInput.value = state.search;\n  }\n  if (searchInput && !searchInput.dataset.bound) {\n    searchInput.dataset.bound = \"1\";\n    searchInput.addEventListener(\"input\", function () {\n      state.search = searchInput.value;\n      render();\n    });\n  }\n  const copyCtxBtn = document.querySelector(\"#copy-agent-context\");\n  if (copyCtxBtn && !copyCtxBtn.dataset.bound) {\n    copyCtxBtn.dataset.bound = \"1\";\n    copyCtxBtn.addEventListener(\"click\", function () {\n      const md = (trace.agentContexts && trace.agentContexts[state.agentId]) || \"\";\n      copyText(md || \"No agent context available.\");\n    });\n  }\n\n  document.querySelector(\"#agents\").innerHTML =\n    (trace.agents || [])\n      .map(function (item) {\n        return (\n          '<button type=\"button\" class=\"' +\n          agentButtonClass(item.id === state.agentId) +\n          '\" data-agent=\"' +\n          escapeHtml(item.id) +\n          '\">' +\n          escapeHtml(item.name) +\n          \"</button>\"\n        );\n      })\n      .join(\"\") ||\n    '<span class=\"text-sm text-[#888]\">No agents detected</span>';\n\n  document.querySelectorAll(\"[data-agent]\").forEach(function (button) {\n    button.addEventListener(\"click\", function () {\n      state.agentId = button.dataset.agent;\n      state.selectedId = \"\";\n      state.kind = \"\";\n      render();\n    });\n  });\n\n  const agentName = document.querySelector(\"#agent-name\");\n  if (agentName) agentName.textContent = agent ? agent.name : \"No agent detected\";\n  const agentDescription = document.querySelector(\"#agent-description\");\n  if (agentDescription) {\n    agentDescription.textContent = agent\n      ? agent.description || \"Static scan found agent-like behavior in this code path.\"\n      : \"Run the scanner on a repo with AI SDK routes or client hooks.\";\n  }\n\n  const tabs = document.querySelector(\"#view-tabs\");\n  if (tabs) {\n    tabs.innerHTML =\n      '<button type=\"button\" class=\"' +\n      viewButtonClass(state.view === \"report\") +\n      '\" data-view=\"report\">Report</button>' +\n      '<button type=\"button\" class=\"' +\n      viewButtonClass(state.view === \"risks\") +\n      '\" data-view=\"risks\">Risks ' +\n      escapeHtml(String(risks.length)) +\n      \"</button>\";\n    tabs.querySelectorAll(\"[data-view]\").forEach(function (button) {\n      button.addEventListener(\"click\", function () {\n        state.view = button.dataset.view;\n        state.selectedId = \"\";\n        state.kind = \"\";\n        render();\n      });\n    });\n  }\n\n  const noteEl = document.querySelector(\"#flow-note\");\n  const kicker = document.querySelector(\"#section-kicker\");\n  if (kicker) kicker.textContent = state.view === \"risks\" ? \"Risks\" : \"User journey\";\n  if (noteEl) {\n    noteEl.textContent =\n      state.view === \"risks\"\n        ? \"Static risks found for the selected agent. Treat these as review targets, not runtime proof.\"\n        : trace.flowNote || \"\";\n  }\n\n  if (state.view === \"risks\") {\n    if (!state.selectedId && risks[0]) {\n      state.selectedId = risks[0].id;\n      state.kind = \"risks\";\n    }\n    const currentRisk = risks.find(function (risk) {\n      return risk.id === state.selectedId;\n    });\n    if (state.selectedId && !currentRisk && risks[0]) {\n      state.selectedId = risks[0].id;\n      state.kind = \"risks\";\n    }\n\n    document.querySelector(\"#flow-timeline\").innerHTML = renderRiskTimeline(risks);\n    document.querySelectorAll(\"[data-risk-id]\").forEach(function (button) {\n      button.addEventListener(\"click\", function () {\n        state.selectedId = button.dataset.riskId;\n        state.kind = \"risks\";\n        render();\n      });\n    });\n\n    const risk = risks.find(function (item) {\n      return item.id === state.selectedId;\n    });\n    const riskIndex = risk ? risks.findIndex((item) => item.id === risk.id) + 1 : 0;\n    document.querySelector(\"#detail-title\").textContent = risk ? \"Risk \" + riskIndex + \" · \" + (risk.severity || \"review\") : \"Risk details\";\n    const detailBox = document.querySelector(\"#detail-box\");\n    detailBox.className =\n      \"min-h-[480px] rounded-xl bg-[#0a0a0a] p-5 shadow-sm \" +\n      (risk ? \"border-2 border-[#0070f3] ring-2 ring-[#0070f3]/20\" : \"border border-[#333]\");\n    detailBox.innerHTML = renderRiskDetail(risk);\n\n    document.querySelectorAll(\".copy-path, .copy-fix\").forEach(function (button) {\n      button.addEventListener(\"click\", function () {\n        copyText(button.dataset.copy);\n      });\n    });\n    renderMermaid();\n    return;\n  }\n\n  if (!state.selectedId && steps[0]) {\n    const initialStep = preferredInitialStep(steps);\n    state.selectedId = initialStep.id;\n    state.kind = initialStep.kind;\n  }\n  const currentStep = steps.find(function (s) {\n    return s.id === state.selectedId;\n  });\n  if (state.selectedId && !currentStep && steps[0]) {\n    const initialStep = preferredInitialStep(steps);\n    state.selectedId = initialStep.id;\n    state.kind = initialStep.kind;\n  }\n\n  document.querySelector(\"#flow-timeline\").innerHTML = renderFlowTimeline(steps);\n  document.querySelectorAll(\"[data-flow-id]\").forEach(function (button) {\n    button.addEventListener(\"click\", function () {\n      state.selectedId = button.dataset.flowId;\n      state.kind = button.dataset.flowKind;\n      render();\n    });\n  });\n\n  const step = steps.find(function (s) {\n    return s.id === state.selectedId;\n  });\n  const item = findItem(state.kind, state.selectedId);\n  document.querySelector(\"#detail-title\").textContent = step ? \"Step \" + step.order + \" · \" + (PHASE_META[step.phase]?.label || \"Details\") : \"Step details\";\n  const detailBox = document.querySelector(\"#detail-box\");\n  detailBox.className =\n    \"min-h-[560px] rounded-xl bg-[#0a0a0a] p-5 shadow-sm \" +\n    (step ? \"border-2 border-[#0070f3] ring-2 ring-[#0070f3]/20\" : \"border border-[#333]\");\n  detailBox.innerHTML = renderDetail(item, state.kind, step);\n\n  document.querySelectorAll(\".copy-path, .copy-fix\").forEach(function (button) {\n    button.addEventListener(\"click\", function () {\n      copyText(button.dataset.copy);\n    });\n  });\n  renderMermaid();\n}\n\nrender();\n";
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -1392,64 +1977,61 @@ function renderSimpleHtmlReport(trace, report) {
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23101410'/%3E%3Cpath d='M16 32c5-9 11-13 16-13s11 4 16 13c-5 9-11 13-16 13s-11-4-16-13Z' fill='none' stroke='%23f4f7ef' stroke-width='5' stroke-linejoin='round'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%232f80ed'/%3E%3C/svg%3E" />
     <meta name="description" content="Local Agent Observe scan results for prompts, tools, model calls, routes, and risks." />
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css" />
     <script>
       tailwind.config = {
         theme: {
           extend: {
             fontFamily: {
-              sans: ["Inter", "sans-serif"],
-              mono: ["JetBrains Mono", "monospace"],
-            },
-            colors: {
-              gray: {
-                50: "#fafafa",
-                100: "#f5f5f5",
-                200: "#e5e5e5",
-                300: "#d4d4d4",
-                400: "#a3a3a3",
-                500: "#737373",
-                600: "#525252",
-                700: "#404040",
-                800: "#262626",
-                900: "#171717",
-              },
+              sans: ["Geist", "ui-sans-serif", "system-ui", "sans-serif"],
+              mono: ["Geist Mono", "ui-monospace", "monospace"],
             },
           },
         },
       };
     </script>
     <style>
-      body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+      html { color-scheme: dark; }
+      body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; background: #000; color: #ededed; }
+      .v-grid-bg { background-image: linear-gradient(to right, rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.04) 1px, transparent 1px); background-size: 64px 64px; mask-image: radial-gradient(ellipse 85% 65% at 50% 0%, #000 30%, transparent 100%); }
+      .v-glow { background: radial-gradient(ellipse 70% 55% at 50% -10%, rgba(0,112,243,0.18), transparent 65%); }
       .flow-step-nested .flow-rail { padding-left: 0.35rem; }
       .flow-step-nested .flow-card { margin-left: 0.25rem; }
       #flow-timeline { padding-left: 0.15rem; }
     </style>
   </head>
-  <body class="bg-white text-gray-900 selection:bg-gray-900 selection:text-white min-h-screen flex flex-col relative overflow-x-hidden">
-    <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[400px] opacity-[0.15] pointer-events-none" style="background: radial-gradient(ellipse at top, #000000 0%, transparent 70%)"></div>
-    <main class="flex-grow w-full max-w-6xl mx-auto px-6 pt-10 pb-16 relative z-10 space-y-4">
+  <body class="bg-black text-[#ededed] selection:bg-[#0070f3] selection:text-white min-h-screen flex flex-col relative overflow-x-hidden font-sans">
+    <div class="v-grid-bg fixed inset-0 pointer-events-none" aria-hidden="true"></div>
+    <div class="v-glow fixed inset-x-0 top-0 h-[420px] pointer-events-none" aria-hidden="true"></div>
+    <main class="flex-grow w-full max-w-[1500px] mx-auto px-6 pt-10 pb-16 relative z-10 space-y-4">
       <div>
         <div class="flex flex-wrap gap-2 mb-3" id="agents" aria-label="Select agent"></div>
-        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900" id="agent-name">Results</h1>
-        <p class="mt-1 max-w-3xl text-[15px] leading-relaxed text-gray-600" id="agent-description"></p>
-        <p class="mt-1 text-[13px] text-gray-500">Scope: <span class="font-medium text-gray-900">${selectionLabel}</span> · ${generatedAt}</p>
+        <h1 class="text-2xl sm:text-3xl font-semibold tracking-[-0.03em] text-[#ededed]" id="agent-name">Results</h1>
+        <p class="mt-1 max-w-3xl text-[15px] leading-relaxed text-[#888]" id="agent-description"></p>
+        <p class="mt-1 text-[13px] text-[#666]">Scope: <span class="font-medium text-[#ededed]">${selectionLabel}</span> · AI SDK: <span class="font-medium text-[#3291ff]">${sdkLabel}</span> · ${generatedAt}${diffSummary}</p>
+        <p class="mt-1 text-[13px] text-[#666]" id="scan-diff-banner"></p>
       </div>
-      <section class="p-4 sm:p-5 rounded-2xl border border-gray-200 bg-white shadow-sm" aria-label="Agent execution flow">
+      <section class="p-4 sm:p-5 rounded-xl border border-[#333] bg-[#0a0a0a]" aria-label="Agent execution flow">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p class="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1" id="section-kicker">User journey</p>
-            <p class="text-[12px] text-gray-500 leading-relaxed" id="flow-note"></p>
+            <p class="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#666] mb-1" id="section-kicker">User journey</p>
+            <p class="text-[12px] text-[#888] leading-relaxed" id="flow-note"></p>
           </div>
-          <div class="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1" id="view-tabs" aria-label="Report view"></div>
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="hidden sm:flex items-center gap-2" id="risk-filters" aria-label="Risk severity filters"></div>
+            <input type="search" id="report-search" placeholder="Search steps & risks…" class="rounded-lg border border-[#333] bg-[#111] px-3 py-1.5 text-sm text-[#ededed] placeholder:text-[#666] focus:outline-none focus:ring-2 focus:ring-[#0070f3]/30 focus:border-[#0070f3]" />
+            <button type="button" id="copy-agent-context" class="rounded-lg border border-[#333] bg-[#111] px-3 py-1.5 text-xs font-medium text-[#ededed] hover:bg-[#1a1a1a] hover:border-[#555]">Copy agent context</button>
+            <div class="inline-flex rounded-lg border border-[#333] bg-[#111] p-1" id="view-tabs" aria-label="Report view"></div>
+          </div>
         </div>
-        <div class="grid lg:grid-cols-[minmax(300px,1fr)_minmax(300px,1fr)] gap-8 lg:gap-10 items-start">
-          <div class="max-h-[min(72vh,720px)] overflow-y-auto pr-2 -mr-2" id="flow-timeline"></div>
+        <div id="mermaid-flow" class="mb-4 hidden rounded-xl border border-[#333] bg-[#050505] p-4 overflow-x-auto"></div>
+        <div class="grid xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)] gap-6 lg:gap-8 items-start">
+          <div class="max-h-[min(76vh,820px)] overflow-y-auto pr-2 -mr-2" id="flow-timeline"></div>
           <div class="lg:sticky lg:top-6">
-            <div class="text-[13px] font-semibold uppercase tracking-wide text-gray-500 mb-3" id="detail-title">Step details</div>
-            <div class="min-h-[280px] rounded-xl border border-gray-200 bg-white p-5 shadow-sm" id="detail-box"></div>
+            <div class="text-[13px] font-semibold uppercase tracking-[0.1em] text-[#666] mb-3" id="detail-title">Step details</div>
+            <div class="min-h-[560px] rounded-xl border border-[#333] bg-[#0a0a0a] p-5" id="detail-box"></div>
           </div>
         </div>
       </section>
@@ -1494,7 +2076,7 @@ export default function AgentObserveSkillPage() {
   const agent = data.agents.find((item: any) => item.id === agentId);
   const byAgent = (items: any[]) => (items || []).filter((item: any) => item.agentId === agentId);
   const kinds = view === "risks" ? riskKinds : reportKinds;
-  const promptTitle = (prompt: any) => prompt.kind === "system" ? "System instructions are added" : prompt.kind === "messages" ? "Conversation context is added" : prompt.valueType === "reference" ? "User instructions are added from a shared reference" : prompt.valueType === "named constant" ? "User instructions are added from a named prompt" : "User instructions are added";
+  const promptTitle = (prompt: any) => prompt.kind === "system" || prompt.kind === "instructions" ? "System instructions are added" : prompt.kind === "messages" ? "Conversation context is added" : prompt.valueType === "reference" ? "User instructions are added from a shared reference" : prompt.valueType === "named constant" ? "User instructions are added from a named prompt" : "User instructions are added";
   const rows = useMemo(() => {
     if (kind === "entrypoints") return byAgent(data.uiEntrypoints).map((entry: any) => ({ meta: "User entry", title: "User sends a chat message", code: "What this means: this is where someone starts the AI experience.\\nHow the user starts this: " + entry.hook + "\\nWhere the message is sent: " + entry.api + "\\nCode: " + entry.file + ":" + entry.line }));
     if (kind === "tools") return byAgent(data.tools).map((tool: any) => ({ meta: tool.sideEffect ? "Action" : "Lookup", title: tool.sideEffect ? "AI can change something outside the chat" : "AI can look up information", code: "What this means: " + (tool.sideEffect ? "the AI can call this helper to change product state, so permissions and logging matter." : "the AI can call this helper to fetch information before answering.") + "\\nTool name: " + tool.name + "\\nDescription: " + tool.description + "\\nInput data: " + tool.schema + "\\nCode: " + tool.file + ":" + tool.line }));
@@ -1688,21 +2270,55 @@ ${rows(records.prompts.filter((p) => p.inline), "No inline prompts detected.", (
 `;
 
 write("report.md", report);
-const trace = tracePayload(generatedAt);
-write("agent-report.html", renderSimpleHtmlReport(trace, report));
-write(
-  "trace-map.json",
-  JSON.stringify(trace, null, 2) + "\n",
-);
+
+const jsonPath = path.join(outDir, "agent-report.json");
+const previousPath = path.join(outDir, "agent-report.previous.json");
+let previousTrace = null;
+if (fs.existsSync(jsonPath)) {
+  try {
+    previousTrace = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+    fs.copyFileSync(jsonPath, previousPath);
+  } catch {
+    previousTrace = null;
+  }
+}
+const scanDiff = computeScanDiff(previousTrace);
+const trace = tracePayload(generatedAt, scanDiff);
+const traceJson = JSON.stringify(trace, null, 2) + "\n";
+write("agent-report.json", traceJson);
+write("agent-map.md", buildAgentMapMarkdown(trace));
+
+if (outputFormat !== "json") {
+  write("agent-report.html", renderSimpleHtmlReport(trace, report));
+}
+
 const nextPagePath = maybeWriteNextPage(trace);
 const excludePatterns = [".agent-observe-skill/"];
 if (nextPagePath) excludePatterns.push("app/agent-observe-skill/");
 const excludePath = addLocalGitExcludes(excludePatterns);
 
-console.log(`Agent Observe report written to ${outDir}`);
-console.log(`Open ${path.join(outDir, "agent-report.html")} in your browser`);
+const highRisks = records.risks.filter((r) => r.severity === "high").length;
+const mediumRisks = records.risks.filter((r) => r.severity === "medium").length;
+
+console.log(`Agent Observe scan complete`);
+console.log(`  AI SDK: ${records.aiSdk?.label || "not detected"}`);
+console.log(`  Agents: ${records.agents.length} · Chains: ${records.chains.length} · Tools: ${records.tools.length} · Risks: ${records.risks.length} (${highRisks} high, ${mediumRisks} medium)`);
+if (scanDiff.hasPrevious) {
+  console.log(`  Since last scan: ${scanDiff.newCount} new, ${scanDiff.fixedCount} fixed`);
+}
+if (outputFormat !== "json" && !ciMode) {
+  console.log(`Open ${path.join(outDir, "agent-report.html")} in your browser`);
+} else {
+  console.log(`JSON written to ${path.join(outDir, "agent-report.json")}`);
+}
+console.log(`Agent map: ${path.join(outDir, "agent-map.md")}`);
 if (nextPagePath) console.log(`Next.js page written to ${nextPagePath}`);
 if (excludePath) console.log(`Generated artifacts are locally ignored via ${excludePath}`);
+
+if (ciMode && highRisks > maxHighRisks) {
+  console.error(`CI failed: ${highRisks} high-severity risk(s) exceed --max-high ${maxHighRisks}`);
+  process.exit(1);
+}
 NODE
   exit $?
 fi
@@ -1775,9 +2391,9 @@ while IFS= read -r file; do
     printf -- '- `%s` client chat entrypoint\n' "$rel_file" >> "$ROUTES"
   fi
 
-  if grep -Eq '\b(system|prompt|messages)\s*:' "$file"; then
+  if grep -Eq '\b(system|prompt|messages|instructions)\s*:' "$file"; then
     prompt_count=$((prompt_count + 1))
-    grep -nE '\b(system|prompt|messages)\s*:' "$file" | head -20 |
+    grep -nE '\b(system|prompt|messages|instructions)\s*:' "$file" | head -20 |
       sed "s#^#- \`$rel_file:#; s#:#\` #" >> "$PROMPTS"
   fi
 

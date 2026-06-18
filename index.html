@@ -7,434 +7,244 @@
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <meta
       name="description"
-      content="A local agent observability skill that maps Vercel AI SDK prompts, tools, model calls, routes, eval gaps, and trace risks."
+      content="Local observability for AI SDK agents — loop bounds, approval gates, telemetry, fix snippets, and CI guardrails."
     />
+    <link rel="stylesheet" href="assets/theme.css" />
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css" />
     <script>
       tailwind.config = {
         theme: {
           extend: {
             fontFamily: {
-              sans: ["Inter", "sans-serif"],
-              mono: ["JetBrains Mono", "monospace"],
-            },
-            colors: {
-              gray: {
-                50: "#fafafa",
-                100: "#f5f5f5",
-                200: "#e5e5e5",
-                300: "#d4d4d4",
-                400: "#a3a3a3",
-                500: "#737373",
-                600: "#525252",
-                700: "#404040",
-                800: "#262626",
-                900: "#171717",
-              },
+              sans: ["Geist", "ui-sans-serif", "system-ui", "sans-serif"],
+              mono: ["Geist Mono", "ui-monospace", "monospace"],
             },
           },
         },
       };
     </script>
     <style>
-      body {
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-      }
-
-      .copy-btn .check-icon {
-        display: none;
-      }
-
-      .copy-btn.is-copied .copy-icon {
-        display: none;
-      }
-
-      .copy-btn.is-copied .check-icon {
-        display: block;
-      }
-
+      .copy-btn .check-icon { display: none; }
+      .copy-btn.is-copied .copy-icon { display: none; }
+      .copy-btn.is-copied .check-icon { display: block; }
       .sr-only {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip: rect(0, 0, 0, 0);
-        white-space: nowrap;
+        position: absolute; width: 1px; height: 1px; overflow: hidden;
+        clip: rect(0, 0, 0, 0); white-space: nowrap;
       }
-
       .command-fallback {
-        position: fixed;
-        left: -9999px;
-        top: 0;
-        width: 1px;
-        height: 1px;
-        opacity: 0;
-        font-family: "JetBrains Mono", ui-monospace, monospace;
+        position: fixed; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0;
+        font-family: "Geist Mono", ui-monospace, monospace;
       }
     </style>
   </head>
-  <body
-    class="bg-white text-gray-900 selection:bg-gray-900 selection:text-white min-h-screen flex flex-col relative overflow-x-hidden"
-  >
-    <div
-      class="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[400px] opacity-[0.15] pointer-events-none"
-      style="background: radial-gradient(ellipse at top, #000000 0%, transparent 70%)"
-    ></div>
+  <body class="v-theme min-h-screen flex flex-col relative overflow-x-hidden font-sans">
+    <div class="v-grid-bg fixed inset-0 pointer-events-none" aria-hidden="true"></div>
+    <div class="v-glow fixed inset-x-0 top-0 h-[480px] pointer-events-none" aria-hidden="true"></div>
 
-    <main class="flex-grow w-full max-w-6xl mx-auto px-6 pt-32 pb-24 relative z-10">
-      <div class="max-w-4xl">
-        <h1
-          id="hero-title"
-          class="text-[2.75rem] sm:text-6xl lg:text-[4rem] font-bold tracking-tight leading-[1.05] text-gray-900"
-        >
-          See every prompt, tool,<br class="hidden sm:block" />
-          and chain in your repo.
-        </h1>
+    <header class="v-nav sticky top-0 z-50">
+      <div class="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
+        <a href="/" class="flex items-center gap-2.5 text-[#ededed] font-medium text-sm tracking-tight">
+          <img src="favicon.svg" alt="" class="w-6 h-6" width="24" height="24" />
+          Agent Observe
+        </a>
+        <nav class="flex items-center gap-6 text-sm">
+          <a href="demo/" class="text-[#888] hover:text-[#ededed] transition-colors">Demo</a>
+          <a
+            href="https://github.com/scottschindler/agent-observe-skill"
+            class="text-[#888] hover:text-[#ededed] transition-colors"
+            target="_blank"
+            rel="noopener noreferrer"
+          >GitHub</a>
+        </nav>
+      </div>
+    </header>
 
-        <p class="mt-8 text-lg sm:text-xl text-gray-500 leading-relaxed max-w-2xl">
-          Agent Observe Skill scans local code for Vercel AI SDK patterns—prompts, tools, model
-          calls, and chains—plus API routes, client entry points, eval gaps, and trace risks.
-        </p>
-
-        <div class="mt-10">
-          <div
-            class="inline-flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 p-3 sm:py-2 sm:px-4 rounded-xl sm:rounded-full border border-gray-200 bg-white shadow-sm transition-shadow hover:shadow-md text-sm text-gray-600"
-          >
-            <div class="flex items-center gap-2 shrink-0">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 20 20"
-                fill="currentColor"
-                class="w-4 h-4 text-emerald-500"
-                aria-hidden="true"
-              >
-                <path
-                  fill-rule="evenodd"
-                  d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z"
-                  clip-rule="evenodd"
-                ></path>
-              </svg>
-              <span class="font-medium text-gray-900">Your code stays local.</span>
-            </div>
-            <span class="hidden sm:block w-px h-4 bg-gray-200"></span>
-            <span class="leading-relaxed">
-              The scanner writes Markdown, JSON, and a simple visual report into
-              <code
-                class="font-mono text-[13px] bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded text-gray-800 ml-0.5"
-                >.agent-observe-skill/</code
-              >.
-            </span>
-          </div>
+    <main class="flex-grow relative z-10 w-full max-w-6xl mx-auto px-6 pt-20 pb-24">
+      <div class="max-w-3xl">
+        <div class="flex flex-wrap gap-2 mb-8">
+          <span class="v-pill">AI SDK 5/6</span>
+          <span class="v-pill">Local-first</span>
+          <span class="v-pill">CI-ready</span>
         </div>
 
-        <div class="mt-10">
-          <a
-            href="demo/"
-            class="inline-flex items-center justify-center h-12 px-8 rounded-lg bg-gray-900 text-white font-medium hover:bg-black transition-all focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2 shadow-[0_4px_14px_0_rgb(0,0,0,0.1)] hover:shadow-[0_6px_20px_rgba(0,0,0,0.23)] hover:-translate-y-[1px]"
+        <h1 class="text-4xl sm:text-5xl lg:text-[3.5rem] font-semibold tracking-[-0.04em] leading-[1.08] v-gradient-text">
+          Observability for agents you ship with the AI SDK.
+        </h1>
+
+        <p class="mt-6 text-lg text-[#888] leading-relaxed max-w-2xl">
+          Scan prompts, tools, loop bounds, approval gates, and telemetry—then get copy-paste fix snippets,
+          <span class="v-code">agent-map.md</span> for your IDE agent, and CI guardrails. Your code never leaves your machine.
+        </p>
+
+        <div class="mt-10 flex flex-wrap items-center gap-3">
+          <a href="demo/" class="v-btn-primary">View demo</a>
+          <button
+            type="button"
+            class="copy-btn v-btn-secondary"
+            data-copy="npx skills add scottschindler/agent-observe-skill"
+            data-label="Copy install command"
+            aria-label="Copy install command"
           >
-            View demo
-          </a>
+            Install skill
+          </button>
         </div>
       </div>
 
-      <section class="mt-14 grid lg:grid-cols-2 gap-6 lg:gap-8" aria-label="Install instructions">
-        <aside
-          class="group flex flex-col p-8 rounded-2xl border border-gray-200 bg-white hover:border-gray-300 transition-colors shadow-sm hover:shadow-md"
-        >
-          <div class="flex items-center gap-3 mb-3">
-            <div
-              class="w-10 h-10 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center shadow-sm"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke-width="1.5"
-                stroke="currentColor"
-                class="w-5 h-5 text-gray-700"
-                aria-hidden="true"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M14.25 9.75L16.5 12l-2.25 2.25m-4.5 0L7.5 12l2.25-2.25M6 20.25h12A2.25 2.25 0 0020.25 18V6A2.25 2.25 0 0018 3.75H6A2.25 2.25 0 003.75 6v12A2.25 2.25 0 006 20.25z"
-                ></path>
-              </svg>
-            </div>
-            <h2 class="text-xl font-semibold tracking-tight text-gray-900">Use with Codex</h2>
-          </div>
-
-          <p class="text-gray-500 text-[15px] leading-relaxed mb-6">
-            Install the scanner as a repo-local skill or from the Codex Plugin Directory.
+      <section class="mt-20 grid sm:grid-cols-2 lg:grid-cols-4 gap-4" aria-label="What it detects">
+        <article class="v-card p-5 transition-colors">
+          <p class="text-[11px] font-medium uppercase tracking-[0.12em] text-[#666] mb-3">Surface area</p>
+          <h3 class="text-[15px] font-medium text-[#ededed] mb-2">Map every agent call</h3>
+          <p class="text-sm text-[#888] leading-relaxed">
+            <code class="text-[#aaa]">streamText</code>, <code class="text-[#aaa]">ToolLoopAgent</code>, tools, routes, hooks—with your <code class="text-[#aaa]">ai</code> version.
           </p>
-
-          <div class="space-y-6">
-            <div class="space-y-3 rounded-xl border border-gray-100 bg-white p-3">
-              <p class="text-[13px] font-medium text-gray-500 uppercase tracking-wide">Repo-local skill</p>
-              <p class="text-[14px] leading-relaxed text-gray-600">
-                From the repo you want to scan, install into
-                <code class="font-mono text-[13px] bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded text-gray-800"
-                  >.agents/skills</code
-                >, then restart Codex from that same checkout and start a new thread.
-              </p>
-              <button
-                type="button"
-                class="copy-btn relative flex w-full items-center justify-between p-3.5 rounded-xl border border-gray-200 bg-gray-50/50 font-mono text-[13px] text-gray-800 group/code hover:border-gray-300 hover:bg-gray-50 transition-all focus:outline-none focus:ring-2 focus:ring-gray-200"
-                data-copy="curl -fsSL https://raw.githubusercontent.com/scottschindler/agent-observe-skill/main/public/downloads/install-codex-skill.sh | bash"
-                data-label="Copy repo skill install command"
-                aria-label="Copy repo skill install command"
-              >
-                <span class="truncate pr-4 select-all text-left"
-                  >curl -fsSL https://raw.githubusercontent.com/scottschindler/agent-observe-skill/main/public/downloads/install-codex-skill.sh | bash</span
-                >
-                <span
-                  class="shrink-0 p-1.5 rounded-md group-hover/code:bg-white border border-transparent group-hover/code:border-gray-200 group-hover/code:shadow-sm text-gray-400 group-hover/code:text-gray-700 transition-all"
-                  aria-hidden="true"
-                >
-                  <svg class="copy-icon w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75"></path>
-                  </svg>
-                  <svg class="check-icon w-4 h-4 text-emerald-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M20 6 9 17l-5-5"></path>
-                  </svg>
-                </span>
-                <span class="sr-only">Copy</span>
-              </button>
-            </div>
-
-            <div class="space-y-3 rounded-xl border border-gray-100 bg-white p-3">
-              <p class="text-[13px] font-medium text-gray-500 uppercase tracking-wide">Codex plugin</p>
-              <p class="text-[14px] leading-relaxed text-gray-600">
-                Add the marketplace catalog. This does not enable the skill by itself; after restart,
-                install Agent Observe Skill from Plugin Directory and start a new thread.
-              </p>
-              <button
-                type="button"
-                class="copy-btn relative flex w-full items-center justify-between p-3.5 rounded-xl border border-gray-200 bg-gray-50/50 font-mono text-[13px] text-gray-800 group/code hover:border-gray-300 hover:bg-gray-50 transition-all focus:outline-none focus:ring-2 focus:ring-gray-200"
-                data-copy="codex plugin marketplace add scottschindler/agent-observe-skill --sparse .agents/plugins"
-                data-label="Copy Codex plugin command"
-                aria-label="Copy Codex plugin command"
-              >
-                <span class="truncate pr-4 select-all text-left"
-                  >codex plugin marketplace add scottschindler/agent-observe-skill --sparse
-                  .agents/plugins</span
-                >
-                <span
-                  class="shrink-0 p-1.5 rounded-md group-hover/code:bg-white border border-transparent group-hover/code:border-gray-200 group-hover/code:shadow-sm text-gray-400 group-hover/code:text-gray-700 transition-all"
-                  aria-hidden="true"
-                >
-                  <svg class="copy-icon w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75"></path>
-                  </svg>
-                  <svg class="check-icon w-4 h-4 text-emerald-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M20 6 9 17l-5-5"></path>
-                  </svg>
-                </span>
-                <span class="sr-only">Copy</span>
-              </button>
-            </div>
-
-            <div class="pt-6 border-t border-gray-100">
-              <p class="text-[13px] font-medium text-gray-500 mb-2 uppercase tracking-wide">After install, ask Codex:</p>
-              <div
-                class="flex items-center justify-between p-3 rounded-xl border border-gray-100 bg-white group/ask hover:border-gray-200 hover:bg-gray-50/50 transition-all"
-              >
-                <span class="font-medium text-[15px] text-gray-900 pr-4">
-                  Use
-                  <span class="text-blue-600 font-mono text-[14px]">$agent-observe-skill</span> to scan this repo.
-                </span>
-                <button
-                  type="button"
-                  class="copy-btn shrink-0 opacity-0 group-hover/ask:opacity-100 p-1.5 rounded-md hover:bg-white border border-transparent hover:border-gray-200 hover:shadow-sm text-gray-400 hover:text-gray-700 transition-all focus:outline-none focus:ring-2 focus:ring-gray-200 focus:opacity-100"
-                  data-copy="Use $agent-observe-skill to scan this repo."
-                  data-label="Copy Codex prompt"
-                  aria-label="Copy Codex prompt"
-                >
-                  <svg class="copy-icon w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75"></path>
-                  </svg>
-                  <svg class="check-icon w-4 h-4 text-emerald-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M20 6 9 17l-5-5"></path>
-                  </svg>
-                  <span class="sr-only">Copy prompt</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </aside>
-
-        <aside
-          class="group flex flex-col p-8 rounded-2xl border border-gray-200 bg-white hover:border-gray-300 transition-colors shadow-sm hover:shadow-md"
-        >
-          <div class="flex items-center gap-3 mb-3">
-            <div
-              class="w-10 h-10 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center shadow-sm"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke-width="1.5"
-                stroke="currentColor"
-                class="w-5 h-5 text-gray-700"
-                aria-hidden="true"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z"
-                ></path>
-              </svg>
-            </div>
-            <h2 class="text-xl font-semibold tracking-tight text-gray-900">Install with Claude Code</h2>
-          </div>
-
-          <p class="text-gray-500 text-[15px] leading-relaxed mb-6">
-            Use the skills.sh CLI, then invoke the skill from Claude Code.
+        </article>
+        <article class="v-card p-5 transition-colors">
+          <p class="text-[11px] font-medium uppercase tracking-[0.12em] text-[#666] mb-3">Safety</p>
+          <h3 class="text-[15px] font-medium text-[#ededed] mb-2">Catch loop &amp; tool risks</h3>
+          <p class="text-sm text-[#888] leading-relaxed">
+            Unbounded loops, missing <code class="text-[#aaa]">needsApproval</code>, and required tools without a <code class="text-[#aaa]">done</code> handler.
           </p>
+        </article>
+        <article class="v-card p-5 transition-colors">
+          <p class="text-[11px] font-medium uppercase tracking-[0.12em] text-[#666] mb-3">Telemetry</p>
+          <h3 class="text-[15px] font-medium text-[#ededed] mb-2">Per-call observability</h3>
+          <p class="text-sm text-[#888] leading-relaxed">
+            <code class="text-[#aaa]">experimental_telemetry</code>, <code class="text-[#aaa]">functionId</code>, PII recording, and scattered model strings.
+          </p>
+        </article>
+        <article class="v-card p-5 transition-colors">
+          <p class="text-[11px] font-medium uppercase tracking-[0.12em] text-[#666] mb-3">Action</p>
+          <h3 class="text-[15px] font-medium text-[#ededed] mb-2">Fix snippets &amp; CI</h3>
+          <p class="text-sm text-[#888] leading-relaxed">
+            Copy-paste fixes per risk. Fail builds with <code class="text-[#aaa]">--ci --max-high 0</code>.
+          </p>
+        </article>
+      </section>
 
-          <div class="space-y-6">
+      <section class="mt-10 grid lg:grid-cols-2 gap-4" aria-label="Install instructions">
+        <aside class="v-card p-6 lg:p-8">
+          <p class="text-[11px] font-medium uppercase tracking-[0.12em] text-[#666] mb-2">Codex</p>
+          <h2 class="text-lg font-medium text-[#ededed] tracking-tight">Repo skill or plugin</h2>
+          <p class="mt-2 text-sm text-[#888] leading-relaxed mb-6">
+            Install into <code class="v-code">.agents/skills</code> or add the plugin marketplace, restart Codex, start a new thread.
+          </p>
+          <div class="space-y-3">
             <button
               type="button"
-              class="copy-btn relative flex w-full items-center justify-between p-3.5 rounded-xl border border-gray-200 bg-gray-50/50 font-mono text-[13px] text-gray-800 group/code hover:border-gray-300 hover:bg-gray-50 transition-all focus:outline-none focus:ring-2 focus:ring-gray-200"
-              data-copy="npx skills add scottschindler/agent-observe-skill"
-              data-label="Copy Claude Code install command"
-              aria-label="Copy Claude Code install command"
+              class="copy-btn w-full flex items-center justify-between gap-3 p-3.5 rounded-lg border border-[#333] bg-[#111] font-mono text-xs text-[#c9c9c9] hover:border-[#555] hover:bg-[#1a1a1a] transition-all text-left"
+              data-copy="curl -fsSL https://raw.githubusercontent.com/scottschindler/agent-observe-skill/main/public/downloads/install-codex-skill.sh | bash"
+              data-label="Copy repo skill install"
+              aria-label="Copy repo skill install"
             >
-              <span class="truncate pr-4 select-all text-left">npx skills add scottschindler/agent-observe-skill</span>
-              <span
-                class="shrink-0 p-1.5 rounded-md group-hover/code:bg-white border border-transparent group-hover/code:border-gray-200 group-hover/code:shadow-sm text-gray-400 group-hover/code:text-gray-700 transition-all"
-                aria-hidden="true"
-              >
-                <svg class="copy-icon w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75"></path>
-                </svg>
-                <svg class="check-icon w-4 h-4 text-emerald-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M20 6 9 17l-5-5"></path>
-                </svg>
-              </span>
-              <span class="sr-only">Copy</span>
+              <span class="truncate">curl -fsSL …/install-codex-skill.sh | bash</span>
+              <span class="shrink-0 text-[#666]" aria-hidden="true">⎘</span>
             </button>
+            <button
+              type="button"
+              class="copy-btn w-full flex items-center justify-between gap-3 p-3.5 rounded-lg border border-[#333] bg-[#111] font-mono text-xs text-[#c9c9c9] hover:border-[#555] hover:bg-[#1a1a1a] transition-all text-left"
+              data-copy="codex plugin marketplace add scottschindler/agent-observe-skill --sparse .agents/plugins"
+              data-label="Copy plugin command"
+              aria-label="Copy plugin command"
+            >
+              <span class="truncate">codex plugin marketplace add …</span>
+              <span class="shrink-0 text-[#666]" aria-hidden="true">⎘</span>
+            </button>
+          </div>
+          <p class="mt-5 pt-5 border-t border-[#2a2a2a] text-sm text-[#888]">
+            Then ask:
+            <button
+              type="button"
+              class="copy-btn ml-1 text-[#3291ff] hover:underline font-mono text-[13px]"
+              data-copy="Use $agent-observe-skill to scan this repo."
+              data-label="Copy Codex prompt"
+            >$agent-observe-skill</button>
+          </p>
+        </aside>
 
-            <div class="pt-6 border-t border-gray-100">
-              <p class="text-[13px] font-medium text-gray-500 mb-2 uppercase tracking-wide">After install, ask Claude Code:</p>
-              <div
-                class="flex items-center justify-between p-3 rounded-xl border border-gray-100 bg-white group/ask hover:border-gray-200 hover:bg-gray-50/50 transition-all"
-              >
-                <span class="font-medium text-[15px] text-gray-900 pr-4">
-                  Use
-                  <span class="text-blue-600 font-mono text-[14px]">$agent-observe-skill</span> to scan this repo.
-                </span>
-                <button
-                  type="button"
-                  class="copy-btn shrink-0 opacity-0 group-hover/ask:opacity-100 p-1.5 rounded-md hover:bg-white border border-transparent hover:border-gray-200 hover:shadow-sm text-gray-400 hover:text-gray-700 transition-all focus:outline-none focus:ring-2 focus:ring-gray-200 focus:opacity-100"
-                  data-copy="Use $agent-observe-skill to scan this repo."
-                  data-label="Copy Claude Code prompt"
-                  aria-label="Copy Claude Code prompt"
-                >
-                  <svg class="copy-icon w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75"></path>
-                  </svg>
-                  <svg class="check-icon w-4 h-4 text-emerald-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M20 6 9 17l-5-5"></path>
-                  </svg>
-                  <span class="sr-only">Copy prompt</span>
-                </button>
-              </div>
-            </div>
+        <aside class="v-card p-6 lg:p-8">
+          <p class="text-[11px] font-medium uppercase tracking-[0.12em] text-[#666] mb-2">Claude Code</p>
+          <h2 class="text-lg font-medium text-[#ededed] tracking-tight">skills.sh install</h2>
+          <p class="mt-2 text-sm text-[#888] leading-relaxed mb-6">
+            One command to add the skill, then invoke it from any Claude Code session.
+          </p>
+          <button
+            type="button"
+            class="copy-btn w-full flex items-center justify-between gap-3 p-3.5 rounded-lg border border-[#333] bg-[#111] font-mono text-xs text-[#c9c9c9] hover:border-[#555] hover:bg-[#1a1a1a] transition-all text-left"
+            data-copy="npx skills add scottschindler/agent-observe-skill"
+            data-label="Copy Claude install"
+            aria-label="Copy Claude install"
+          >
+            <span>npx skills add scottschindler/agent-observe-skill</span>
+            <span class="shrink-0 text-[#666]" aria-hidden="true">⎘</span>
+          </button>
+          <div class="mt-6 p-4 rounded-lg border border-[#2a2a2a] bg-[#050505]">
+            <p class="text-[11px] font-medium uppercase tracking-[0.1em] text-[#666] mb-2">Output</p>
+            <ul class="text-sm text-[#888] space-y-1.5 font-mono">
+              <li><span class="text-[#666]">├─</span> agent-report.html</li>
+              <li><span class="text-[#666]">├─</span> agent-report.json</li>
+              <li><span class="text-[#666]">└─</span> agent-map.md</li>
+            </ul>
           </div>
         </aside>
       </section>
 
-      <section class="mt-40 grid md:grid-cols-3 gap-12 lg:gap-16" aria-label="What it detects">
-        <div class="group">
-          <div
-            class="w-12 h-12 rounded-xl bg-gray-50 border border-gray-200 flex items-center justify-center mb-6 shadow-sm group-hover:scale-105 transition-transform duration-300"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-900" aria-hidden="true">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"></path>
-            </svg>
-          </div>
-          <h3 class="text-lg font-semibold text-gray-900 mb-3 tracking-tight">Prompts and model calls</h3>
-          <p class="text-[15px] text-gray-500 leading-relaxed">
-            Find inline prompts, system messages, Vercel AI SDK calls, OpenAI SDK calls, and chain steps.
+      <section class="mt-4 v-card p-6 lg:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6" aria-label="CI guardrail">
+        <div class="max-w-xl">
+          <p class="text-[11px] font-medium uppercase tracking-[0.12em] text-[#666] mb-2">CI</p>
+          <h3 class="text-lg font-medium text-[#ededed]">Block merges on agent risks</h3>
+          <p class="mt-2 text-sm text-[#888] leading-relaxed">
+            Exit non-zero when high-severity findings exceed your threshold. JSON output diffs against the previous scan.
           </p>
         </div>
-
-        <div class="group">
-          <div
-            class="w-12 h-12 rounded-xl bg-gray-50 border border-gray-200 flex items-center justify-center mb-6 shadow-sm group-hover:scale-105 transition-transform duration-300"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-900" aria-hidden="true">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M14.25 6.087c0-.355.186-.676.401-.959.221-.29.349-.634.349-1.003 0-1.036-1.007-1.875-2.25-1.875s-2.25.84-2.25 1.875c0 .369.128.713.349 1.003.215.283.401.604.401.959v0a1.5 1.5 0 01-1.5 1.5H6a1.5 1.5 0 00-1.5 1.5v0a1.5 1.5 0 001.5 1.5h1.5v0a1.5 1.5 0 011.5 1.5v0a1.5 1.5 0 01-1.5 1.5H6a1.5 1.5 0 00-1.5 1.5v0a1.5 1.5 0 001.5 1.5h4.375a1.5 1.5 0 011.5 1.5v0a1.5 1.5 0 01-1.5 1.5V21c0 1.036 1.007 1.875 2.25 1.875s2.25-.84 2.25-1.875v0c0-.369-.128-.713-.349-1.003-.215-.283-.401-.604-.401-.959v0a1.5 1.5 0 011.5-1.5h4.375a1.5 1.5 0 001.5-1.5v0a1.5 1.5 0 00-1.5-1.5h-1.5v0a1.5 1.5 0 01-1.5-1.5v0a1.5 1.5 0 011.5-1.5H21a1.5 1.5 0 001.5-1.5v0a1.5 1.5 0 00-1.5-1.5h-4.375a1.5 1.5 0 01-1.5-1.5v0z"></path>
-            </svg>
-          </div>
-          <h3 class="text-lg font-semibold text-gray-900 mb-3 tracking-tight">Tools and routes</h3>
-          <p class="text-[15px] text-gray-500 leading-relaxed">
-            Map tool schemas, execute handlers, side effects, API routes, and UI entry points.
-          </p>
-        </div>
-
-        <div class="group">
-          <div
-            class="w-12 h-12 rounded-xl bg-gray-50 border border-gray-200 flex items-center justify-center mb-6 shadow-sm group-hover:scale-105 transition-transform duration-300"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-gray-900" aria-hidden="true">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
-            </svg>
-          </div>
-          <h3 class="text-lg font-semibold text-gray-900 mb-3 tracking-tight">Risks and gaps</h3>
-          <p class="text-[15px] text-gray-500 leading-relaxed">
-            Flag chains without evals, trace IDs, structured logging, or durable telemetry.
-          </p>
-        </div>
+        <button
+          type="button"
+          class="copy-btn w-full lg:max-w-md flex items-center justify-between gap-3 p-3.5 rounded-lg border border-[#333] bg-[#111] font-mono text-xs text-[#c9c9c9] hover:border-[#555] transition-all text-left shrink-0"
+          data-copy="bash agent-observe-skill/scripts/skill.sh . --ci --max-high 0"
+          data-label="Copy CI command"
+          aria-label="Copy CI command"
+        >
+          <span class="truncate">bash skill.sh . --ci --max-high 0</span>
+          <span class="text-[#666]" aria-hidden="true">⎘</span>
+        </button>
       </section>
     </main>
 
-    <footer
-      class="w-full max-w-6xl mx-auto px-6 py-10 mt-auto border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between text-[15px] text-gray-500 relative z-10"
-    >
-      <p>
-        Built by
-        <a href="https://www.dashlabs.sh" class="font-medium text-gray-900 hover:underline">Dashlabs</a>.
-      </p>
+    <footer class="relative z-10 border-t border-[#2a2a2a] py-8">
+      <div class="max-w-6xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-[#666]">
+        <p>
+          Built by
+          <a href="https://www.dashlabs.sh" class="text-[#ededed] hover:underline">Dashlabs</a>
+        </p>
+        <p class="font-mono text-xs text-[#555]">Your code stays local.</p>
+      </div>
     </footer>
 
     <textarea class="command-fallback" aria-hidden="true" tabindex="-1"></textarea>
     <script>
       const fallback = document.querySelector(".command-fallback");
-
       async function copyText(value) {
         try {
           if (navigator.clipboard && window.isSecureContext) {
             await navigator.clipboard.writeText(value);
             return;
           }
-        } catch (error) {
-          // Fall back to the hidden textarea path below.
-        }
-
+        } catch (e) {}
         fallback.value = value;
         fallback.focus();
         fallback.select();
         document.execCommand("copy");
       }
-
       document.querySelectorAll("[data-copy]").forEach((button) => {
         button.addEventListener("click", async () => {
           await copyText(button.dataset.copy);
           button.classList.add("is-copied");
+          const prev = button.getAttribute("aria-label");
           button.setAttribute("aria-label", "Copied");
-          window.setTimeout(() => {
+          setTimeout(() => {
             button.classList.remove("is-copied");
-            button.setAttribute("aria-label", button.dataset.label);
+            if (prev) button.setAttribute("aria-label", prev);
           }, 1400);
         });
       });
